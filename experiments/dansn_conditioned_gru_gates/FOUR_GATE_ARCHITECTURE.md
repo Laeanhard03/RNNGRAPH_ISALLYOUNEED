@@ -125,3 +125,32 @@ Run [45890601026](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/r
 Despite successful storage and path activation, all systems scored **0% query top-1 accuracy** across three seeds. Mean query NLL was 4.233 (plain GRU), 4.547 (readout fusion), 4.207 (three-path gate GRU), 5.111 (full four-gate DG-GRU), 5.222 (no memory injection), 4.249 (no persistent write), and 5.118 (no graph evidence). The task is therefore not yet solved end-to-end: DANSN exposes the expected stored path, but the neural decoder has not converted that retrieved representation into the correct output token. No superiority claim is justified.
 
 The next diagnostic iteration ensures every possible answer token appears during supervised training and adds value-only ranking/probability metrics plus per-query recurrent-state reset scores. This distinguishes a decoder failure from output-vocabulary competition and from reliance on transient hidden state.
+
+## Four-gate state-coupling correction — 2026-11-27
+
+The first balanced diagnostic showed that the previous memory path was too weakly coupled to recurrence: persistent memory entered only inside the candidate activation, then its effect was multiplied again by the update gate. The reset gate also filtered the candidate input but did not clear old hidden content from the carried-state interpolation. Full DG-GRU therefore remained vulnerable to distractor-contaminated hidden state.
+
+The corrected four-gate cell explicitly combines two state sources:
+
+1. **Recurrent proposal**
+   [
+   h_t^{\mathrm{rec}}=(1-z_t)\odot(r_t\odot h_{t-1})+
+   z_t\odot\tanh(W_xx_t+W_h(r_t\odot h_{t-1}))
+   ]
+2. **Persistent-memory proposal**
+   [
+   m_t^{\mathrm{proj}}=\tanh(W_m\,\mathrm{ReadDANSN}(x_t,h_{t-1},G))
+   ]
+3. **Memory-controlled state fusion**
+   [
+   \alpha_t=g_t^{\mathrm{mem}}\odot a_t,qquad
+   h_t=(1-\alpha_t)\odot h_t^{\mathrm{rec}}+
+   \alpha_t\odot m_t^{\mathrm{proj}}
+   ]
+   where (a_t) indicates whether a persistent DANSN vector was actually retrieved.
+
+This is a key change: DANSN memory is now an independent source of recurrent-state content and is not attenuated a second time by the update gate. The reset gate now controls both candidate conditioning and hidden-state retention, allowing it to discard distractor state when graph context indicates a different active association.
+
+The direct persistent read is separate from the broad transient graph-neighborhood readout. It first attends to stored vectors on immediate outgoing continuations of the matched context; if none exist, it falls back to other memory-bearing active paths. Each stored vector is keyed using the child-node embedding plus the vector itself and receives learned query attention with graph-frequency and memory-quality priors. The ordinary graph readout remains available to the output head and write path.
+
+Ablations remain parameter-shape matched: no memory injection sets the fusion gate to zero; no persistent write prevents storage; no graph evidence zeros structural controller features while actual memory availability remains separately detected. Checkpoint marker is now `dansn_four_gate_gru_v2` because the state-transition semantics changed.
