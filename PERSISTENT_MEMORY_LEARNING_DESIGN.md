@@ -226,11 +226,28 @@ Supporting files:
 - `train_persistent_demo.py`
 - Updated `README.md`
 
-## 10. Remaining implementation limits and verification
+## 10. Memory-quality safeguards and comparison harness
 
-- The first adapter tests passed locally (5/5) using an engine-compatible test double. The repository test file imports the real `Brain` from canonical `agi.py`, but an execution against that exact file was not completed in this session.
-- A tiny synthetic demo ran against the same test double. Its training-stream perplexity decreased across repeated passes, but this is only a wiring/smoke-test result, not a model-quality result or generalization evidence.
-- The first version uses a fixed vocabulary, simple FIFO memory eviction, one post-target context write, and one sequence stream per training call.
-- Persistent vectors live in a sparse external map keyed by graph path rather than fields added to the original `Neuron` class.
-- Dynamic vocabulary expansion, smarter memory eviction, provenance/contradiction handling, abstract idea/concept merging, batching, and comparative benchmarks remain future work.
+The persistent adapter now includes:
+- Per-context confidence metadata that lightly biases retrieval toward trusted memory vectors.
+- Confidence-scaled writes. A zero-confidence write is an exact no-op for the stored vector.
+- LRU memory-cap eviction, with lower quality and lower write count as tie-breakers.
+- Persisted quality, last-access, and write-count metadata in checkpoint format v2. Format v1 checkpoints load with default quality metadata.
+- Immediate path-index updates during graph writes, so newly created paths can be matched by the next recurrent step without a full graph rebuild.
+
+The comparison harness `benchmark_continual_learning.py` evaluates four systems on a small chronological synthetic corpus:
+1. Plain GRU.
+2. Original DANSN-only predictor.
+3. Read-only DANSN-GRU (graph prebuilt from the training stream; no graph or state writes).
+4. Writable persistent DANSN-RNN.
+
+It reports test prequential NLL/perplexity and graph candidate coverage. The DANSN-only and writable hybrid variants score a target before updating the graph with it. The harness is a smoke/research comparison, not a benchmark claim; larger datasets and multiple seeds are necessary.
+
+## 11. Remaining implementation limits and verification
+
+- Eight adapter tests now cover causal predict-before-write, immediate graph/memory growth, online parameter updates, zero-confidence write safety, LRU eviction, checkpoint quality metadata, v1 checkpoint migration, and unknown-context fallback.
+- A GitHub Actions workflow runs canonical DANSN tests, the earlier recurrent adapter tests, persistent-memory tests, and a comparison-harness smoke test against the actual repository `agi.py`. The first CI run failed before tests due to an unsupported pip-cache configuration; that was removed and clean reruns were triggered. Results are pending at the time this document was updated.
+- The prototype still uses a fixed vocabulary, one post-target context write, a FIFO-independent LRU heuristic rather than learned utility-based eviction, and a single-stream training API.
+- Persistent vectors live in a sparse external map keyed by stable graph paths rather than fields added to the original `Neuron` class.
+- Dynamic vocabulary expansion, provenance/contradiction handling, abstract idea/concept merging, batching, and multi-seed larger-scale comparisons remain future work.
 - The canonical `agi.py` file has not been modified. The adapter is an isolated experiment and must remain separate until validated.
