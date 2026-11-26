@@ -36,9 +36,14 @@ h_t = (1 - z_t) * h_(t-1) + z_t * candidate_t
 
 The fourth gate is stored in the recurrent state when the prediction is made. The target is scored first. Only then is the target revealed and the saved write gate applied to the candidate persistent-memory vector. The write gate cannot inspect the target it is about to score.
 
-## Graph writes vs. persistent-vector writes
+## What the persistent-write gate controls
 
-The observed token sequence still grows/reinforces discrete DANSN topology after scoring, as in the prior persistent-memory experiment. g_write specifically controls whether/how strongly a learned state vector is stored on the post-target context path. A configurable threshold suppresses negligible writes. A zero-confidence observation never writes a persistent vector.
+The same write gate controls both forms of DANSN storage after the target has been scored:
+
+1. **Graph topology reinforcement:** the mean write-gate strength, multiplied by the supplied confidence, becomes a fractional frequency increment for each observed edge on the context-to-target path. This changes association strength without modifying the canonical agi.py engine.
+2. **Persistent node-vector update:** the per-dimension write-gate vector controls the blend between the previous node-memory vector and the new candidate state.
+
+A configurable threshold suppresses negligible writes. A zero write gate or zero confidence performs neither structural path reinforcement nor persistent-vector storage. Graph-frequency increments are non-differentiable; gradients flow through the per-dimension persistent-vector blend during truncated BPTT.
 
 ## Implementation
 
