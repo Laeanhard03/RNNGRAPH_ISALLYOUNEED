@@ -167,3 +167,8 @@ Run:
     python -m experiments.dansn_conditioned_gru_gates.associative_recall --seeds 7,13,21 --epochs 2
 
 Compared systems: plain GRU, readout-fusion DANSN-RNN, three-path gate-conditioned GRU, full four-gate DG-GRU, and the three four-gate ablations. Report both neural query accuracy/NLL and graph path/vector-memory coverage. High graph coverage with low neural accuracy means storage/retrieval succeeds but the learned readout does not yet decode it. This is a synthetic path-association mechanism test, not a real-language or abstract semantic-reasoning benchmark.
+
+
+### Retrieval matcher correction
+
+The first delayed-recall run exposed a terminal-suffix shadowing bug in the shared experimental graph reader. The matcher could prefer a longer, newly created suffix with no continuation over a shorter prefix that contains the learned association. The reader now backs off to the longest suffix with outgoing graph continuations or a persistent vector. A regression test reproduces the actual causal sequence. The post-fix synthetic run is the one to use when assessing recall behavior.
