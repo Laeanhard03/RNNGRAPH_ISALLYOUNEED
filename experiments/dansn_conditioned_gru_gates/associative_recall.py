@@ -289,6 +289,7 @@ def _evaluate_plain(model: PlainGRU, dataset: RecallDataset) -> dict:
         "mean_memory_gate_at_query": None,
         "mean_effective_memory_mix_at_query": None,
         "mean_persistent_memory_readout_norm_at_query": None,
+        "mean_memory_output_context_norm_at_query": None,
         "mean_update_gate_at_query": None,
         "mean_reset_gate_at_query": None,
         "mean_query_delay_tokens": dataset.metadata["mean_query_delay_tokens"],
@@ -311,6 +312,7 @@ def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
     memory_gate_query: list[float] = []
     effective_memory_mix_query: list[float] = []
     persistent_memory_norm_query: list[float] = []
+    memory_output_norm_query: list[float] = []
     update_gate_query: list[float] = []
     reset_gate_query: list[float] = []
     value_only_correct = 0
@@ -377,6 +379,11 @@ def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
                 persistent_memory_norm_query.append(
                     float(torch.linalg.vector_norm(
                         trace["persistent_memory_readout"]
+                    ).detach().cpu())
+                )
+                memory_output_norm_query.append(
+                    float(torch.linalg.vector_norm(
+                        trace["memory_output_context"]
                     ).detach().cpu())
                 )
                 update_gate_query.append(
@@ -449,6 +456,10 @@ def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
         "mean_persistent_memory_readout_norm_at_query": (
             sum(persistent_memory_norm_query) / len(persistent_memory_norm_query)
             if persistent_memory_norm_query else None
+        ),
+        "mean_memory_output_context_norm_at_query": (
+            sum(memory_output_norm_query) / len(memory_output_norm_query)
+            if memory_output_norm_query else None
         ),
         "mean_update_gate_at_query": (
             sum(update_gate_query) / len(update_gate_query)
@@ -624,6 +635,7 @@ def run_benchmark(
         for memory_key in (
             "mean_effective_memory_mix_at_query",
             "mean_persistent_memory_readout_norm_at_query",
+            "mean_memory_output_context_norm_at_query",
         ):
             values = [
                 run["results"][system][memory_key]
