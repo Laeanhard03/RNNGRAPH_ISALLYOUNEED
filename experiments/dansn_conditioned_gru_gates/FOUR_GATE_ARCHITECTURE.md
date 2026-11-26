@@ -95,3 +95,15 @@ This architecture is a research hypothesis. Do not claim it outperforms readout-
 The GitHub Actions run [45878580368](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45878580368) passed the full experiment test directory: **24 passed**. It reported one harmless PyTorch warning because NumPy is not installed in the minimal CI test environment.
 
 The bounded WikiText-103 workflow [45878304021](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45878304021) is still running from an earlier commit that predates the fractional topology-reinforcement change described above. Treat it as an earlier pipeline smoke run, not as an evaluation of the final four-gate write behavior. A final real-corpus result for the weighted graph/vector-write implementation remains outstanding.
+
+
+## Targeted synthetic mechanism test
+
+The follow-on branch also includes `associative_recall.py`. It generates deterministic training associations and a disjoint held-out key set. Each held-out association is introduced at test time, followed by distractor tokens and a shuffled recall query. The RNN hidden state is reset before test while DANSN topology and persistent memory from training remain. Test-time neural parameters are frozen, and every query loss is recorded before the target is revealed.
+
+The evaluator reports two distinct outcomes:
+
+- **Graph mechanism:** whether the expected context path is activated and its persistent vector exists at query time; whether support writes create the intended graph path/vector.
+- **Predictive mechanism:** top-1 value accuracy and query negative log-likelihood after delay.
+
+The comparison includes plain GRU, readout-fusion, three-path gate-conditioned GRU, full DG-GRU, and four-gate ablations. This synthetic benchmark tests one-shot sequence association and delayed retrieval only. It does not test general semantic idea formation or multi-hop reasoning across distinct graph branches.
