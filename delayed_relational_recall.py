@@ -310,6 +310,7 @@ def evaluate_hybrid_queries(
     correct = 0
     target_reachable = 0
     target_memory_visible = 0
+    target_bearing_memory_visible = 0
 
     for where_id, person_id, target_id in queries:
         state = model.initial_state() if reset_recurrent_state else base_state.detached()
@@ -321,7 +322,13 @@ def evaluate_hybrid_queries(
         correct += int(prediction == target_id)
         active = trace["active_paths"]
         target_reachable += int(any(path and path[-1] == target_id for path in active))
-        target_memory_visible += int(any(path in model.node_memory for path in active))
+        active_memory_paths = [
+            path for path in active if path in model.node_memory
+        ]
+        target_memory_visible += int(bool(active_memory_paths))
+        target_bearing_memory_visible += int(any(
+            path and path[-1] == target_id for path in active_memory_paths
+        ))
 
     count = max(len(queries), 1)
     return {
@@ -330,6 +337,7 @@ def evaluate_hybrid_queries(
         "mean_reciprocal_rank": sum(1.0 / rank for rank in ranks) / count,
         "target_reachable_fraction": target_reachable / count,
         "target_memory_visible_fraction": target_memory_visible / count,
+        "target_bearing_memory_visible_fraction": target_bearing_memory_visible / count,
         "queries": float(len(queries)),
     }
 
@@ -725,7 +733,10 @@ def aggregate_multi_seed_results(
         for metric in metric_keys:
             sample = runs[0]["results"][delay][metric]
             keys = ["accuracy", "mean_nll", "mean_reciprocal_rank"]
-            for optional in ("target_reachable_fraction", "target_memory_visible_fraction"):
+            for optional in (
+                "target_reachable_fraction", "target_memory_visible_fraction",
+                "target_bearing_memory_visible_fraction",
+            ):
                 if optional in sample:
                     keys.append(optional)
             summary[delay][metric] = {
