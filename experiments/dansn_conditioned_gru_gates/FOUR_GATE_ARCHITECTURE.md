@@ -154,3 +154,8 @@ This is a key change: DANSN memory is now an independent source of recurrent-sta
 The direct persistent read is separate from the broad transient graph-neighborhood readout. It first attends to stored vectors on immediate outgoing continuations of the matched context; if none exist, it falls back to other memory-bearing active paths. Each stored vector is keyed using the child-node embedding plus the vector itself and receives learned query attention with graph-frequency and memory-quality priors. The ordinary graph readout remains available to the output head and write path.
 
 Ablations remain parameter-shape matched: no memory injection sets the fusion gate to zero; no persistent write prevents storage; no graph evidence zeros structural controller features while actual memory availability remains separately detected. Checkpoint marker is now `dansn_four_gate_gru_v2` because the state-transition semantics changed.
+
+
+## Memory-gate initialization
+
+The first direct state-fusion run measured mean effective memory mix of 0.084; the model learned to keep the memory gate nearly closed, and full DG-GRU only modestly improved NLL over its no-memory-injection ablation. The memory gate's initial bias is therefore now 0.0 (initial sigmoid near 0.5) so retrieved persistent vectors can contribute from early training. The persistent-write gate remains initialized at -2.0 to keep writes conservative until learned. This is an initialization hypothesis being tested, not a guaranteed performance improvement.
