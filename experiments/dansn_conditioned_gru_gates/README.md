@@ -181,3 +181,8 @@ GitHub Actions run [45890601026](https://github.com/Laeanhard03/RNNGRAPH_ISALLYO
 However, query top-1 accuracy remained **0% for every system**, including the full four-gate model. Mean query NLL: plain GRU 4.233; readout-fusion 4.547; three-path gate GRU 4.207; full four-gate 5.111; no-memory-injection 5.222; no-persistent-write 4.249; no-graph-evidence 5.118. This means graph-path storage and retrieval are now structurally confirmed, but the network's neural output head does not yet decode the retrieved association into the correct value. Do not claim the full architecture works end-to-end or outperforms the simpler baselines.
 
 The next diagnostic run strengthens the task so all 16 possible output-value classes occur in supervised training (16 training keys, 12 held-out keys), then reports value-restricted top-1, probability mass assigned to value tokens, target rank among values, and a second query score with the temporary RNN hidden state reset at each query while DANSN memory is retained. These isolate output decoding from general vocabulary competition and recurrent carry-over.
+
+
+### Four-gate state coupling
+
+The four-gate cell now has a direct DANSN-to-hidden-state path. The reset gate controls both candidate conditioning and how much prior hidden state survives. The memory gate independently blends an attended persistent DANSN vector with the recurrent proposal, rather than placing memory only inside the candidate activation (where update-gate multiplication weakened it). Direct memory retrieval prioritizes stored vectors on outgoing continuations of the matched context, separate from the broad transient graph readout. The current checkpoint marker is `dansn_four_gate_gru_v2`.
