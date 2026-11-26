@@ -32,7 +32,7 @@ from persistent_dansn_rnn import (
 )
 
 
-FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v1"
+FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v2"
 GRAPH_EVIDENCE_SIZE = 5
 
 
@@ -65,7 +65,9 @@ class DANSNFourGateCell(nn.Module):
         self.controller = nn.Linear(controller_input_size, 4 * hidden_size)
         self.candidate_input = nn.Linear(hidden_size, hidden_size)
         self.candidate_hidden = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.candidate_memory = nn.Linear(hidden_size, hidden_size, bias=False)
+        # Persistent DANSN vectors are a separate state source, not another
+        # term buried inside the candidate activation.
+        self.memory_projection = nn.Linear(hidden_size, hidden_size, bias=False)
 
         # Start conservatively: initially limit the memory injection and
         # persistent write paths while allowing update/reset to be learned.
@@ -80,6 +82,7 @@ class DANSNFourGateCell(nn.Module):
         graph_memory: Tensor,
         graph_evidence: Tensor,
         *,
+        memory_available: bool | Tensor = True,
         memory_enabled: bool = True,
         write_enabled: bool = True,
     ) -> tuple[Tensor, dict[str, Tensor]]:
@@ -107,21 +110,44 @@ class DANSNFourGateCell(nn.Module):
         if not write_enabled:
             write_gate = torch.zeros_like(write_gate)
 
+        # Reset is allowed to clear the carried recurrent state as well as
+        # filtering the state used to form the candidate. This makes it possible
+        # for graph evidence to suppress stale/distractor-driven hidden content.
+        reset_hidden = reset_gate * previous_hidden
         candidate = torch.tanh(
             self.candidate_input(inputs)
-            + self.candidate_hidden(reset_gate * previous_hidden)
-            + self.candidate_memory(memory_gate * graph_memory)
+            + self.candidate_hidden(reset_hidden)
         )
-        hidden = (
-            (1.0 - update_gate) * previous_hidden
+        recurrent_hidden = (
+            (1.0 - update_gate) * reset_hidden
             + update_gate * candidate
+        )
+
+        # DANSN persistent memory has its own route into h_t. Unlike placing
+        # memory only inside candidate, this blend is NOT attenuated by the
+        # update gate a second time.
+        memory_proposal = torch.tanh(self.memory_projection(graph_memory))
+        if isinstance(memory_available, Tensor):
+            availability = memory_available.to(
+                device=inputs.device, dtype=inputs.dtype
+            )
+        else:
+            availability = inputs.new_tensor(float(bool(memory_available)))
+        memory_mix = memory_gate * availability
+        hidden = (
+            (1.0 - memory_mix) * recurrent_hidden
+            + memory_mix * memory_proposal
         )
         gates = {
             "update_gate": update_gate,
             "reset_gate": reset_gate,
             "memory_injection_gate": memory_gate,
+            "effective_memory_mix": memory_mix,
+            "memory_available": availability,
             "persistent_write_gate": write_gate,
             "candidate": candidate,
+            "memory_proposal": memory_proposal,
+            "recurrent_hidden": recurrent_hidden,
         }
         return hidden, gates
 
@@ -236,6 +262,81 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
     def initial_state(self) -> FourGateState:
         return FourGateState()
 
+    def _read_persistent_memory(
+        self,
+        token_embedding: Tensor,
+        previous_hidden: Tensor,
+        matched_path,
+        active_paths: Sequence[tuple[int, ...]],
+    ) -> tuple[Tensor, list[tuple[int, ...]]]:
+        """Retrieve stored vectors on the matched context's outgoing branches.
+
+        The broad graph readout performs transient message passing over a
+        neighborhood. This readout is deliberately separate: it attends only
+        to persistent vectors stored on immediate answer continuations of the
+        selected context. If no direct continuation has a stored vector, it
+        falls back to memory-bearing active paths.
+        """
+        zero = token_embedding.new_zeros(self.hidden_size)
+        if not active_paths:
+            return zero, []
+
+        active_set = set(active_paths)
+        candidates: list[tuple[int, ...]] = []
+        if matched_path is not None:
+            prefix_len = len(matched_path)
+            candidates = [
+                path for path in active_paths
+                if len(path) == prefix_len + 1
+                and path[:prefix_len] == matched_path
+                and path in self.node_memory
+            ]
+        if not candidates:
+            candidates = [
+                path for path in active_paths if path in self.node_memory
+            ]
+        if not candidates:
+            return zero, []
+
+        query = self.query_projection(
+            torch.cat((token_embedding, previous_hidden), dim=-1)
+        )
+        keys: list[Tensor] = []
+        values: list[Tensor] = []
+        scores: list[Tensor] = []
+        for path in candidates:
+            stored = self.node_memory[path].to(
+                device=self.device, dtype=token_embedding.dtype
+            )
+            node_id = torch.tensor(
+                int(path[-1]), dtype=torch.long, device=self.device
+            )
+            node_embedding = self.embedding(node_id)
+            node_features = torch.tanh(
+                self.node_embedding_projection(node_embedding) + stored
+            )
+            keys.append(self.key_projection(node_features))
+            values.append(self.value_projection(stored))
+
+            node = self._path_nodes[path]
+            frequency = max(float(node.frequency), 0.0)
+            quality = max(float(self.node_memory_quality.get(path, 1.0)), 1e-4)
+            prior = (
+                math.log1p(frequency) * self.structural_bias
+                + math.log(quality)
+            )
+            scores.append(
+                torch.dot(keys[-1], query) / math.sqrt(self.hidden_size)
+                + query.new_tensor(prior)
+            )
+            self._touch_memory(path)
+
+        weights = torch.softmax(torch.stack(scores), dim=0)
+        retrieved = torch.sum(
+            torch.stack(values, dim=0) * weights.unsqueeze(-1), dim=0
+        )
+        return retrieved, candidates
+
     def forward_step(
         self,
         token_id: int,
@@ -257,15 +358,20 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         graph_readout, matched_path, active_paths = self._read_graph(
             token_embedding, previous_hidden, history
         )
+        persistent_readout, persistent_paths = self._read_persistent_memory(
+            token_embedding, previous_hidden, matched_path, active_paths
+        )
         evidence = self._graph_evidence(matched_path, active_paths, token_embedding)
         if self.gate_ablation == "no_graph_evidence":
             evidence = torch.zeros_like(evidence)
 
+        memory_available = bool(persistent_paths)
         hidden, gates = self.four_gate_cell(
             token_embedding,
             previous_hidden,
-            graph_readout,
+            persistent_readout,
             evidence,
+            memory_available=memory_available,
             memory_enabled=self.gate_ablation != "no_memory_injection",
             write_enabled=self.gate_ablation != "no_persistent_write",
         )
@@ -279,6 +385,8 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             "matched_path": matched_path,
             "active_paths": active_paths,
             "graph_readout": graph_readout,
+            "persistent_memory_readout": persistent_readout,
+            "persistent_memory_paths": persistent_paths,
             "graph_evidence": evidence,
             **gates,
         }
