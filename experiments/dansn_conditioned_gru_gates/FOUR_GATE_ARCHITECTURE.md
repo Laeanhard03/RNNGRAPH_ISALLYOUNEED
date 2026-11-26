@@ -153,7 +153,7 @@ This is a key change: DANSN memory is now an independent source of recurrent-sta
 
 The direct persistent read is separate from the broad transient graph-neighborhood readout. It first attends to stored vectors on immediate outgoing continuations of the matched context; if none exist, it falls back to other memory-bearing active paths. Each stored vector is keyed using the child-node embedding plus the vector itself and receives learned query attention with graph-frequency and memory-quality priors. The ordinary graph readout remains available to the output head and write path.
 
-Ablations remain parameter-shape matched: no memory injection sets the fusion gate to zero; no persistent write prevents storage; no graph evidence zeros structural controller features while actual memory availability remains separately detected. Checkpoint marker is now `dansn_four_gate_gru_v3` because the state-transition semantics changed.
+Ablations remain parameter-shape matched: no memory injection sets the fusion gate to zero; no persistent write prevents storage; no graph evidence zeros structural controller features while actual memory availability remains separately detected. Checkpoint marker is now `dansn_four_gate_gru_v4` because the state-transition semantics changed.
 
 
 ## Memory-gate initialization
@@ -173,4 +173,29 @@ q_t^{mem}=\alpha_t\odot ReadDANSN_t^{persistent}
 logits_t=W_o[\,h_t\;;\;g_t^{broad}\;;\;q_t^{mem}\,]+b_o
 \]
 
-The same effective memory mix (\alpha_t) now controls both (a) DANSN's contribution to recurrent hidden state and (b) the separate associative-memory channel seen by the output decoder. This makes the decoder jointly observe recurrent state, transient graph context, and persistent associative memory. The no-memory-injection ablation sets both the hidden fusion and decoder skip to zero. Checkpoint marker is now `dansn_four_gate_gru_v3`.
+The same effective memory mix (\alpha_t) now controls both (a) DANSN's contribution to recurrent hidden state and (b) the separate associative-memory channel seen by the output decoder. This makes the decoder jointly observe recurrent state, transient graph context, and persistent associative memory. The no-memory-injection ablation sets both the hidden fusion and decoder skip to zero. Checkpoint marker is now `dansn_four_gate_gru_v4`.
+
+
+## V4 memory-gated next-token pointer
+
+The v3 balanced recall result showed a useful associative effect (NLL 4.164 vs 4.477 for the no-memory ablation; whole-vocabulary top-1 5.56% vs 2.78%) but value-only top-1 remained low at 11.1%. A dense learned decoder should not have to infer an exact token identity solely from a compressed memory vector when DANSN already stores a discrete next-edge association.
+
+V4 therefore derives a token pointer distribution from persistent vectors stored on the matched context's immediate outgoing graph edges. The attention scores already used for persistent-vector retrieval are scattered into a vocabulary-sized distribution over the child token IDs:
+[
+p_t^{DANSN}(v)=sum_{j: token(path_j)=v} a_{t,j}
+]
+Only immediate continuation edges with persistent vectors contribute to this pointer. If there is no such edge, pointer availability is false and the pointer mix is zero. Memory-only fallback paths can still contribute to vector state fusion but cannot create a next-token pointer.
+
+The memory gate controls the probability mixture:
+[
+\beta_t=mean(\alpha_t)
+]
+[
+p_t(v)=(1-\beta_t)\,softmax(logits_t^{GRU})(v)+\beta_t\,p_t^{DANSN}(v)
+]
+[
+logits_t(v)=\log(clamp(p_t(v),\epsilon))
+]
+Thus the model receives DANSN in three cooperating places: recurrent-state fusion, a direct decoder vector channel, and an explicit associative next-token distribution. Pointer topology selection remains discrete; the attention scores, mixture gate, GRU, vector read, and neural distribution are differentiable. This path is causal because it reads only edges written after earlier targets were scored.
+
+The no-memory-injection ablation zeros both the hidden/decoder vector routes and the pointer mixture. The no-persistent-write ablation has no stored continuation vectors and therefore no pointer. Checkpoint marker is now `dansn_four_gate_gru_v4`.
