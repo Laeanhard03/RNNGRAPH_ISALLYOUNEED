@@ -287,6 +287,8 @@ def _evaluate_plain(model: PlainGRU, dataset: RecallDataset) -> dict:
         "support_vector_write_rate": None,
         "mean_write_gate_at_support": None,
         "mean_memory_gate_at_query": None,
+        "mean_effective_memory_mix_at_query": None,
+        "mean_persistent_memory_readout_norm_at_query": None,
         "mean_update_gate_at_query": None,
         "mean_reset_gate_at_query": None,
         "mean_query_delay_tokens": dataset.metadata["mean_query_delay_tokens"],
@@ -307,6 +309,8 @@ def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
     support_vector_writes = 0
     write_gate_support: list[float] = []
     memory_gate_query: list[float] = []
+    effective_memory_mix_query: list[float] = []
+    persistent_memory_norm_query: list[float] = []
     update_gate_query: list[float] = []
     reset_gate_query: list[float] = []
     value_only_correct = 0
@@ -366,6 +370,14 @@ def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
             if "memory_injection_gate" in trace:
                 memory_gate_query.append(
                     float(trace["memory_injection_gate"].mean().detach().cpu())
+                )
+                effective_memory_mix_query.append(
+                    float(trace["effective_memory_mix"].mean().detach().cpu())
+                )
+                persistent_memory_norm_query.append(
+                    float(torch.linalg.vector_norm(
+                        trace["persistent_memory_readout"]
+                    ).detach().cpu())
                 )
                 update_gate_query.append(
                     float(trace["update_gate"].mean().detach().cpu())
@@ -429,6 +441,14 @@ def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
         "mean_memory_gate_at_query": (
             sum(memory_gate_query) / len(memory_gate_query)
             if memory_gate_query else None
+        ),
+        "mean_effective_memory_mix_at_query": (
+            sum(effective_memory_mix_query) / len(effective_memory_mix_query)
+            if effective_memory_mix_query else None
+        ),
+        "mean_persistent_memory_readout_norm_at_query": (
+            sum(persistent_memory_norm_query) / len(persistent_memory_norm_query)
+            if persistent_memory_norm_query else None
         ),
         "mean_update_gate_at_query": (
             sum(update_gate_query) / len(update_gate_query)
@@ -601,6 +621,17 @@ def run_benchmark(
             ]
             if values:
                 summary[system][gate_key] = _stats(values)
+        for memory_key in (
+            "mean_effective_memory_mix_at_query",
+            "mean_persistent_memory_readout_norm_at_query",
+        ):
+            values = [
+                run["results"][system][memory_key]
+                for run in runs
+                if run["results"][system][memory_key] is not None
+            ]
+            if values:
+                summary[system][memory_key] = _stats(values)
 
     first = runs[0]
     return {
