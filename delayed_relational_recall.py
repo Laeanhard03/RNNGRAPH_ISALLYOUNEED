@@ -326,7 +326,7 @@ def run_delayed_recall(
     delays: Sequence[int] = (0, 8, 24, 48),
     epochs: int = 3,
     hidden_size: int = 48,
-    window_size: int = 10,
+    window_size: int = 8,
     graph_depth: int = 8,
     chunk_size: int = 16,
     learning_rate: float = 2e-3,
@@ -512,7 +512,7 @@ def main():
     parser.add_argument("--delays", type=str, default="0,8,24,48")
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--hidden-size", type=int, default=48)
-    parser.add_argument("--window-size", type=int, default=10)
+    parser.add_argument("--window-size", type=int, default=8)
     parser.add_argument("--graph-depth", type=int, default=8)
     parser.add_argument("--chunk-size", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=2e-3)
