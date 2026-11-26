@@ -36,19 +36,39 @@ def _permutation(size: int, rng: random.Random) -> List[int]:
     return values
 
 
-def _fact_text(subject_count: int, vehicle_map: Sequence[int],
-               place_map: Sequence[int], rng: random.Random) -> str:
+def _fact_text(
+    subject_count: int,
+    vehicle_map: Sequence[int],
+    place_map: Sequence[int],
+    rng: random.Random,
+    interleaved_distractors: Sequence[str] = (),
+) -> str:
     order = list(range(subject_count))
     rng.shuffle(order)
-    rows = []
-    for subject in order:
-        vehicle = vehicle_map[subject]
-        place = place_map[vehicle]
-        rows.append(
-            f"person{subject:02d} owns vehicle{vehicle:02d} . "
-            f"vehicle{vehicle:02d} parked place{place:02d} ."
-        )
-    return " ".join(rows)
+    first_edges = [
+        f"person{subject:02d} owns vehicle{vehicle_map[subject]:02d} ."
+        for subject in order
+    ]
+    second_edges = [
+        f"vehicle{vehicle_map[subject]:02d} parked "
+        f"place{place_map[vehicle_map[subject]]:02d} ."
+        for subject in order
+    ]
+    if not interleaved_distractors:
+        # Preserve the original contiguous two-hop serialization by default.
+        rows = []
+        for subject in order:
+            vehicle = vehicle_map[subject]
+            place = place_map[vehicle]
+            rows.append(
+                f"person{subject:02d} owns vehicle{vehicle:02d} . "
+                f"vehicle{vehicle:02d} parked place{place:02d} ."
+            )
+        return " ".join(rows)
+
+    # Hard condition: first-hop facts, unrelated complete fact pairs, then
+    # second-hop facts. The model must join facts by the repeated vehicle ID.
+    return " ".join(first_edges + list(interleaved_distractors) + second_edges)
 
 
 def _distractor_rows(count: int, offset: int = 0) -> List[str]:
@@ -76,9 +96,12 @@ def build_recall_data(
     subject_count: int = 24,
     distractor_count: int = 48,
     train_fraction: float = 0.75,
+    interleave_facts: int = 0,
 ):
     if subject_count < 4 or distractor_count < 0:
         raise ValueError("subject_count must be >= 4 and distractor_count >= 0")
+    if interleave_facts < 0 or interleave_facts > distractor_count:
+        raise ValueError("interleave_facts must be within [0, distractor_count]")
     if not 0.5 <= train_fraction < 1.0:
         raise ValueError("train_fraction must be in [0.5, 1)")
 
@@ -93,13 +116,17 @@ def build_recall_data(
     train_queries = list(range(split))
     test_queries = list(range(split, subject_count))
 
+    distractors = _distractor_rows(distractor_count)
+    interleaved_distractors = distractors[:interleave_facts]
+    trailing_distractors = distractors[interleave_facts:]
     train_facts = _fact_text(
-        subject_count, train_vehicle, train_place, random.Random(seed + 1)
+        subject_count, train_vehicle, train_place, random.Random(seed + 1),
+        interleaved_distractors,
     )
     test_facts = _fact_text(
-        subject_count, test_vehicle, test_place, random.Random(seed + 2)
+        subject_count, test_vehicle, test_place, random.Random(seed + 2),
+        interleaved_distractors,
     )
-    distractors = _distractor_rows(distractor_count)
     train_query_text = _query_rows(train_queries, train_place, train_vehicle)
 
     # Build one fixed vocabulary from both knowledge bases. Test mappings and
@@ -122,15 +149,17 @@ def build_recall_data(
         "train_facts_text": train_facts,
         "test_facts_text": test_facts,
         "distractors": distractors,
+        "interleaved_distractors": interleaved_distractors,
+        "interleave_facts": interleave_facts,
         "train_query_indices": train_queries,
         "test_query_indices": test_queries,
         "train_place_map": train_place,
         "train_vehicle_map": train_vehicle,
         "test_place_map": test_place,
         "test_vehicle_map": test_vehicle,
-        "train_prefix_ids": encode(train_facts + " " + " ".join(distractors)),
+        "train_prefix_ids": encode(train_facts + " " + " ".join(trailing_distractors)),
         "test_fact_ids": encode(test_facts),
-        "distractor_ids": [encode(row) for row in distractors],
+        "distractor_ids": [encode(row) for row in trailing_distractors],
         "train_query_ids": [
             (
                 vocab.word_to_id["where"],
@@ -147,7 +176,7 @@ def build_recall_data(
             )
             for subject in test_queries
         ],
-        "train_ids": encode(train_facts + " " + " ".join(distractors) + " " + train_query_text),
+        "train_ids": encode(train_facts + " " + " ".join(trailing_distractors) + " " + train_query_text),
     }
 
 
