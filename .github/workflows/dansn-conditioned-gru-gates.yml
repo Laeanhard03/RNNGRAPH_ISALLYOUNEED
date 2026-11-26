@@ -19,7 +19,7 @@ on:
       - ".github/workflows/dansn-conditioned-gru-gates.yml"
 
 jobs:
-  test:
+  test-and-benchmark:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -36,3 +36,55 @@ jobs:
           python -m pip install -r requirements-recurrent.txt pytest
       - name: Run DANSN-conditioned GRU tests
         run: python -m pytest -q experiments/dansn_conditioned_gru_gates/
+      - name: Run three-seed comparison
+        run: |
+          mkdir -p benchmark-results
+          python -m experiments.dansn_conditioned_gru_gates.benchmark \
+            --epochs 3 --seeds 7,13,21 --hidden-size 48 \
+            --chunk-size 8 --window-size 8 \
+            --output benchmark-results/dansn_conditioned_gru_comparison.json \
+            > benchmark-results/benchmark-console.json
+      - name: Write benchmark summary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("benchmark-results/dansn_conditioned_gru_comparison.json").read_text())
+          systems = [
+              ("plain_gru", "Plain GRU"),
+              ("readout_fusion_dansn_gru", "Readout-fusion DANSN-GRU"),
+              ("gate_conditioned_dansn_gru", "Gate-conditioned DANSN-GRU"),
+          ]
+          lines = [
+              "## DANSN-conditioned GRU three-seed pilot",
+              "",
+              "Same synthetic chronological stream, seeds 7/13/21, three epochs, hidden width 48.",
+              "Static and adaptive perplexities are separate protocols. Parameter counts are reported, not matched.",
+              "",
+              "| System | Static PPL (mean ± std) | Adaptive PPL (mean ± std) | Parameters |",
+              "|---|---:|---:|---:|",
+          ]
+          for key, label in systems:
+              item = data["summary"][key]
+              static = item["static_perplexity"]
+              adaptive = item["adaptive_perplexity"]
+              params = item["parameter_count"]["mean"]
+              lines.append(
+                  f"| {label} | {static['mean']:.4f} ± {static['population_std']:.4f} "
+                  f"| {adaptive['mean']:.4f} ± {adaptive['population_std']:.4f} "
+                  f"| {params:.0f} |"
+              )
+          lines += [
+              "",
+              "Exploratory synthetic pilot only; not evidence of general superiority.",
+              "See the uploaded JSON artifact for per-seed metrics and graph-memory statistics.",
+          ]
+          with open("$GITHUB_STEP_SUMMARY", "a", encoding="utf-8") as handle:
+              handle.write("\\n".join(lines) + "\\n")
+          PY
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: dansn-conditioned-gru-three-seed-results
+          path: benchmark-results/
+          if-no-files-found: error
