@@ -154,3 +154,30 @@ This is still a fixed-vocabulary synthetic task with held-out subjects and indep
 ### Pilot result (3 seeds)
 
 The full result is in [MEMORY_READ_SUPERVISION_PILOT_RESULTS.md](MEMORY_READ_SUPERVISION_PILOT_RESULTS.md). The final tie-aware CI run [45865069032](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45865069032) passed all tests and the three-seed benchmark. The persistent memory-read answer head reached 11.11% ± 7.86 pp accuracy with recurrent state reset (2 correct out of 18 queries), versus 0% for the matched topology-only read-head ablation; with recurrent state preserved it reached 5.56% ± 7.86 pp (1/18). Its mean reciprocal rank improved over the uniform ablation, but mean NLL remained worse than uniform guessing (3.694–4.155 versus 3.178). The main next-token output head still had 0% continuous-state accuracy. This is a weak ranking signal, not reliable recall or calibrated answer selection; do not promote the auxiliary head into the core yet.
+
+
+### Interleaved relational facts and exact-entity bridge
+
+The delayed-recall harness now has an optional hard mode:
+
+```text
+person owns vehicle
+... unrelated complete fact pairs ...
+vehicle parked place
+where person -> predict place
+```
+
+Use `--interleave-facts N` to insert N unrelated fact pairs between the complete first-hop and second-hop fact groups. The original contiguous task remains the default (`--interleave-facts 0`). Training and test knowledge bases both use the same serialization format but independently randomized relationships.
+
+For the interleaved condition, the harness trains a matched pair of persistent models:
+- **Unlinked trie:** ordinary DANSN path growth and persistent writes, with no associative bridge.
+- **Exact-entity linked:** after facts are observed, join the context-specific `person owns vehicle` path to the observed `vehicle parked place` branch when the exact vehicle token ID matches. Alias the already-observed target-bearing memory vector to the joined path. The linker reads facts only and never reads query labels or writes an answer edge.
+
+Run the hard mode:
+
+```bash
+python test_delayed_relational_recall.py
+python delayed_relational_recall.py --subjects 24 --distractors 24 --interleave-facts 8 --delays 0,8 --epochs 3 --hidden-size 32 --window-size 9 --graph-depth 8 --seeds 7,13,21
+```
+
+This is a deliberately narrow structural probe: it tests exact repeated entity-token linking, not semantic entity resolution, aliases, pronouns, or paraphrase. The bridge is an experimental operation in the recall harness; it has not been promoted into `persistent_dansn_rnn.py` or the canonical `agi.py`.
