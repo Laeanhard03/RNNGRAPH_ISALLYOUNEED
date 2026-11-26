@@ -51,6 +51,7 @@ Original project scripts:
 pip install -r requirements-recurrent.txt
 python train_persistent_demo.py
 python test_persistent_dansn_rnn.py
+python benchmark_continual_learning.py --epochs 3
 ```
 
 The demo uses a small synthetic corpus and is only a smoke test. It is not a benchmark. The test suite checks causal predict-before-write behavior, immediate graph growth, persistent memory retrieval, online parameter updates, prequential evaluation without weight updates, checkpoint round-tripping, and unknown-context fallback.
@@ -90,3 +91,9 @@ Measure prequential next-token NLL/perplexity, delayed and multi-hop recall, ret
 - Original DANSN test suite: 14/14 passed in the earlier development session.
 - Earlier recurrent prototype: 4/4 unit tests passed in the earlier development session.
 - Persistent DANSN-RNN adapter tests are included; task-level benchmarks and superiority claims remain unestablished.
+
+## Memory quality and comparison harness
+
+The persistent adapter stores per-context memory quality and access metadata. Low-confidence writes are blended less strongly, quality provides a small retrieval prior, and capacity eviction removes the least-recently-used entry (ties favor lower-quality/less-used memories). A zero-confidence write leaves the existing vector unchanged. Checkpoint format v2 stores these metadata fields and still loads v1 checkpoints with default quality values.
+
+Run `python benchmark_continual_learning.py --epochs 3` to compare a plain GRU, original DANSN, a read-only DANSN-GRU, and the writable persistent DANSN-RNN on a small synthetic chronological stream. The harness reports prequential NLL/perplexity and graph candidate coverage. It is a smoke/research comparison, not a benchmark claim; use multiple seeds and larger held-out data before drawing conclusions.
