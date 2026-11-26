@@ -40,13 +40,20 @@ class DANSNConditionedGRUCell(nn.Module):
     Here z is the fraction of the candidate state to incorporate.
     """
 
-    def __init__(self, input_size: int, hidden_size: int) -> None:
+    def __init__(
+        self, input_size: int, hidden_size: int, conditioning_mode: str = "full"
+    ) -> None:
         super().__init__()
         if input_size < 1 or hidden_size < 1:
             raise ValueError("input_size and hidden_size must be positive")
+        if conditioning_mode not in {"reset_only", "update_only", "full"}:
+            raise ValueError(
+                "conditioning_mode must be reset_only, update_only, or full"
+            )
 
         self.input_size = int(input_size)
         self.hidden_size = int(hidden_size)
+        self.conditioning_mode = conditioning_mode
 
         # Input and retrieved context each contribute to all three pathways.
         self.input_projection = nn.Linear(input_size, 3 * hidden_size)
@@ -75,6 +82,16 @@ class DANSNConditionedGRUCell(nn.Module):
 
         x_z, x_r, x_n = self.input_projection(inputs).chunk(3, dim=-1)
         c_z, c_r, c_n = self.context_projection(graph_context).chunk(3, dim=-1)
+        # Keep all projection parameters present across ablations so reset-only,
+        # update-only, and full variants have identical parameter counts.
+        # Inactive pathways are exactly zeroed and receive no gradient.
+        if self.conditioning_mode == "reset_only":
+            c_z = torch.zeros_like(c_z)
+            c_n = torch.zeros_like(c_n)
+        elif self.conditioning_mode == "update_only":
+            c_r = torch.zeros_like(c_r)
+            c_n = torch.zeros_like(c_n)
+
         h_z, h_r = self.hidden_gate_projection(previous_hidden).chunk(2, dim=-1)
 
         update_gate = torch.sigmoid(x_z + h_z + c_z)
@@ -113,7 +130,8 @@ class DANSNConditionedGRU(PersistentDANSNRNN):
                  window_size: int = 12, graph_depth: int = 3,
                  message_rounds: int = 2, max_active_nodes: int = 128,
                  max_memory_nodes: int = 50_000,
-                 structural_bias: float = 0.15) -> None:
+                 structural_bias: float = 0.15,
+                 gate_ablation: str = "full") -> None:
         super().__init__(
             engine=engine,
             vocab_size=vocab_size,
@@ -132,7 +150,14 @@ class DANSNConditionedGRU(PersistentDANSNRNN):
         del self.fusion_gate
         del self.readout_projection
 
-        self.gate_cell = DANSNConditionedGRUCell(hidden_size, hidden_size)
+        if gate_ablation not in {"reset_only", "update_only", "full"}:
+            raise ValueError(
+                "gate_ablation must be reset_only, update_only, or full"
+            )
+        self.gate_ablation = gate_ablation
+        self.gate_cell = DANSNConditionedGRUCell(
+            hidden_size, hidden_size, conditioning_mode=gate_ablation
+        )
         # The inherited output head uses [recurrent_state ; graph_readout].
 
     def forward_step(
@@ -188,6 +213,7 @@ class DANSNConditionedGRU(PersistentDANSNRNN):
                 "max_memory_nodes": self.max_memory_nodes,
                 "structural_bias": self.structural_bias,
                 "vocab_size": self.embedding.num_embeddings,
+                "gate_ablation": self.gate_ablation,
             },
             "model": self.state_dict(),
             "node_memory": {
@@ -215,6 +241,8 @@ class DANSNConditionedGRU(PersistentDANSNRNN):
             raise ValueError("checkpoint vocabulary size mismatch")
         if int(config["hidden_size"]) != self.hidden_size:
             raise ValueError("checkpoint hidden size mismatch")
+        if config.get("gate_ablation", "full") != self.gate_ablation:
+            raise ValueError("checkpoint gate_ablation does not match this model")
         self.load_state_dict(checkpoint["model"])
         self._rebuild_path_index()
 
