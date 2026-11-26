@@ -275,6 +275,81 @@ def run_benchmark(epochs=3, hidden_size=48, chunk_size=8, window_size=8,
         ),
     }
 
+
+def run_multi_seed(seeds: Sequence[int], epochs=3, hidden_size=48, chunk_size=8,
+                   window_size=8, learning_rate=2e-3):
+    """Run independent seeds and summarize static/adaptive perplexity."""
+    seed_list = [int(seed) for seed in seeds]
+    if not seed_list:
+        raise ValueError("at least one seed is required")
+    runs = [
+        run_benchmark(
+            epochs=epochs,
+            hidden_size=hidden_size,
+            chunk_size=chunk_size,
+            window_size=window_size,
+            learning_rate=learning_rate,
+            seed=seed,
+        )
+        for seed in seed_list
+    ]
+    paths = {
+        "plain_gru": ("test_static", "test_adaptive_parameter_updates"),
+        "dansn_only": ("test_static_graph", "test_adaptive_graph_updates"),
+        "read_only_dansn_gru": (
+            "test_static",
+            "test_adaptive_parameter_updates_graph_frozen",
+        ),
+        "persistent_dansn_rnn": (
+            "test_static",
+            "test_adaptive_parameter_and_graph_updates",
+        ),
+    }
+
+    def stats(values):
+        mean = sum(values) / len(values)
+        variance = sum((value - mean) ** 2 for value in values) / len(values)
+        return {"mean": mean, "std": math.sqrt(variance), "runs": len(values)}
+
+    summary = {}
+    for system, (static_key, adaptive_key) in paths.items():
+        static_values = [
+            run["results"][system][static_key]["perplexity"] for run in runs
+        ]
+        adaptive_values = [
+            run["results"][system][adaptive_key]["perplexity"] for run in runs
+        ]
+        summary[system] = {
+            "static_perplexity": stats(static_values),
+            "adaptive_perplexity": stats(adaptive_values),
+        }
+        if system == "dansn_only":
+            summary[system]["static_candidate_coverage"] = stats([
+                run["results"][system][static_key]["candidate_coverage"]
+                for run in runs
+            ])
+            summary[system]["adaptive_candidate_coverage"] = stats([
+                run["results"][system][adaptive_key]["candidate_coverage"]
+                for run in runs
+            ])
+
+    return {
+        "protocol": {
+            "seeds": seed_list,
+            "epochs": epochs,
+            "hidden_size": hidden_size,
+            "chunk_size": chunk_size,
+            "window_size": window_size,
+            "static_vs_adaptive": "summarized separately; never mix the two protocols",
+        },
+        "summary": summary,
+        "runs": runs,
+        "interpretation": (
+            "Small synthetic multi-seed pilot. Mean/std describe seed variation only; "
+            "they do not establish performance on natural language or broad generalization."
+        ),
+    }
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type=int, default=3)
@@ -283,17 +358,28 @@ def main():
     parser.add_argument("--window-size", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=2e-3)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument(
+        "--seeds",
+        type=str,
+        default=None,
+        help="Optional comma-separated multi-seed run, e.g. 7,13,21",
+    )
     parser.add_argument("--output", type=Path, default=Path("benchmark_results.json"))
     args = parser.parse_args()
 
-    result = run_benchmark(
+    common = dict(
         epochs=args.epochs,
         hidden_size=args.hidden_size,
         chunk_size=args.chunk_size,
         window_size=args.window_size,
         learning_rate=args.learning_rate,
-        seed=args.seed,
     )
+    if args.seeds:
+        seeds = [int(item.strip()) for item in args.seeds.split(",") if item.strip()]
+        result = run_multi_seed(seeds, **common)
+    else:
+        result = run_benchmark(seed=args.seed, **common)
+
     args.output.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))
     print(f"\nWrote {args.output}")
