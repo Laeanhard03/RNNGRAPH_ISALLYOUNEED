@@ -199,3 +199,32 @@ logits_t(v)=\log(clamp(p_t(v),\epsilon))
 Thus the model receives DANSN in three cooperating places: recurrent-state fusion, a direct decoder vector channel, and an explicit associative next-token distribution. Pointer topology selection remains discrete; the attention scores, mixture gate, GRU, vector read, and neural distribution are differentiable. This path is causal because it reads only edges written after earlier targets were scored.
 
 The no-memory-injection ablation zeros both the hidden/decoder vector routes and the pointer mixture. The no-persistent-write ablation has no stored continuation vectors and therefore no pointer. Checkpoint marker is now `dansn_four_gate_gru_v4`.
+
+
+## V4 causal associative-recall result — 2026-11-27
+
+The corrected seven-system benchmark completed successfully in [GitHub Actions run 45896936662](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45896936662). The full experiment suite passed **41 tests, 1 non-fatal warning in 5.28s**.
+
+Balanced task: 16 training keys cover all 16 output-value classes; 12 disjoint held-out keys; unseen held-out key/value pairings; 64 distractors; mean support→query separation 116.4 tokens; 12 queries per seed; 3 seeds. Neural parameters are frozen during evaluation, recurrent state is reset once at test start, the graph and persistent vectors are retained, and every target is scored before it is written.
+
+Three-seed mean metrics:
+| System | Exact top-1 | Value-only top-1 | NLL | Pointer mix | Pointer target prob. |
+|---|---:|---:|---:|---:|---:|
+| Plain GRU | 0% | 0% | 4.310 | — | — |
+| Readout-fusion DANSN | 0% | 27.8% | 4.199 | — | — |
+| Three-path gate GRU | 0% | 8.3% | 4.320 | — | — |
+| Full four-gate v4 | **100%** | **100%** | **0.385** | 0.679 | 1.0 |
+| Four-gate, no memory injection | 2.78% | 5.56% | 4.477 | 0 | 1.0 |
+| Four-gate, no persistent write | 2.78% | 11.1% | 4.038 | 0 | 0 |
+| Four-gate, no graph evidence | **100%** | **100%** | 0.396 | 0.671 | 1.0 |
+
+The full model had 100% active expected-path coverage and persistent-vector coverage. The pointer had one persistent candidate on average and assigned the true answer probability 1.0. Full four-gate also reached 100% value-only top-1 when the recurrent hidden state was reset at each individual query, confirming the stored DANSN association could answer without relying on transient hidden-state carry.
+
+Critical interpretation:
+- Full model vs no-memory-injection ablation shows the memory routes are essential: exact top-1 fell from 100% to 2.78% and NLL worsened 0.385→4.477 when both memory state fusion and pointer mixture were disabled.
+- No-persistent-write also collapsed exact top-1 to 2.78% with 0 pointer candidates, demonstrating that the pointer depends on persistent storage.
+- No-graph-evidence retained 100% recall; for this simple single-outgoing-association task, the graph-evidence feature vector is not necessary. The test supports memory-gated persistent retrieval, not the independent usefulness of graph evidence/reset/update gates.
+- The readout-fusion baseline reached 27.8% value-only top-1, so V4 clearly beats it on this specific task, but it is not parameter matched and the v4 system adds an explicit symbolic next-token pointer.
+- Each query had exactly one persistent outgoing answer candidate (pointer candidate count 1). This is a controlled one-shot key/value recall task, not yet ambiguous multi-branch disambiguation, multi-hop reasoning, free-form language, or abstract semantic learning.
+
+Result artifacts: GitHub Actions artifact `dansn-associative-recall-results`, artifact ID 15154461731. Full run/JSON and data can be downloaded from the workflow page. Do not generalize the 100% result beyond the tested single-candidate delayed-association setting.
