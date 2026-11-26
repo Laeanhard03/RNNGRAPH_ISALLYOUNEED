@@ -97,3 +97,19 @@ Measure static held-out next-token NLL/perplexity separately from score-before-u
 - Graph-informed GRU gates have precedents in gated graph neural networks. Any contribution must come from DANSN-specific context retrieval, persistent context-specific memory, online structural updates, or demonstrated empirical benefit—not from the broad combination alone.
 
 Treat this as an untested hypothesis until controlled results support it. Do not promote it into the existing persistent-memory core or change the canonical DANSN engine based on unit tests alone.
+
+
+## Matched three-way benchmark
+
+Run a same-stream comparison of plain GRU, the existing readout-fusion DANSN-GRU, and this gate-conditioned DANSN-GRU:
+
+    python -m pytest -q experiments/dansn_conditioned_gru_gates/
+
+    python -m experiments.dansn_conditioned_gru_gates.benchmark \
+      --epochs 3 --seeds 7,13,21 --hidden-size 48 \
+      --chunk-size 8 --window-size 8 \
+      --output experiments/dansn_conditioned_gru_gates/benchmark_results.json
+
+The harness trains each system on the same chronological synthetic corpus and evaluates a common held-out stream. It reports frozen/static test metrics separately from score-before-update adaptive metrics, plus parameter counts and graph-memory size. The three systems use the same hidden width, but their total parameter counts are not identical; the harness reports this rather than implying a parameter-matched comparison.
+
+Start with the one-epoch benchmark smoke test in CI. Treat the multi-seed run as an exploratory pilot. The corpus is deliberately small and synthetic; follow up with longer and harder delayed/interleaved relational-recall tests before drawing conclusions.
