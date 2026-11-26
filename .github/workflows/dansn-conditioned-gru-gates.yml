@@ -19,7 +19,7 @@ on:
       - ".github/workflows/dansn-conditioned-gru-gates.yml"
 
 jobs:
-  test-and-benchmark:
+  tests-and-ablations:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -34,33 +34,36 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-recurrent.txt pytest
-      - name: Run DANSN-conditioned GRU tests
+      - name: Run DANSN-conditioned GRU and ablation tests
         run: python -m pytest -q experiments/dansn_conditioned_gru_gates/
-      - name: Run three-seed comparison
+      - name: Run three-seed gate ablations
         run: |
           mkdir -p benchmark-results
-          python -m experiments.dansn_conditioned_gru_gates.benchmark \
+          python -m experiments.dansn_conditioned_gru_gates.ablation \
             --epochs 3 --seeds 7,13,21 --hidden-size 48 \
             --chunk-size 8 --window-size 8 \
-            --output benchmark-results/dansn_conditioned_gru_comparison.json \
+            --output benchmark-results/dansn_gru_gate_ablations.json \
             > benchmark-results/benchmark-console.json
-      - name: Write benchmark summary
+      - name: Write ablation summary
         run: |
           python - <<'PY'
           import json
           import os
           from pathlib import Path
-          data = json.loads(Path("benchmark-results/dansn_conditioned_gru_comparison.json").read_text())
+          data = json.loads(Path("benchmark-results/dansn_gru_gate_ablations.json").read_text())
           systems = [
               ("plain_gru", "Plain GRU"),
-              ("readout_fusion_dansn_gru", "Readout-fusion DANSN-GRU"),
-              ("gate_conditioned_dansn_gru", "Gate-conditioned DANSN-GRU"),
+              ("readout_fusion", "Readout-fusion DANSN-GRU"),
+              ("reset_only", "DANSN in reset gate only"),
+              ("update_only", "DANSN in update gate only"),
+              ("full", "DANSN in reset + update + candidate"),
           ]
           lines = [
-              "## DANSN-conditioned GRU three-seed pilot",
+              "## DANSN GRU gate ablation pilot",
               "",
-              "Same synthetic chronological stream, seeds 7/13/21, three epochs, hidden width 48.",
-              "Static and adaptive perplexities are separate protocols. Parameter counts are reported, not matched.",
+              "Seeds 7/13/21; three epochs; hidden width 48; same synthetic chronological stream.",
+              "Static and adaptive perplexity are separate protocols. Lower is better.",
+              "The three gate ablations have identical parameter counts by construction.",
               "",
               "| System | Static PPL (mean ± std) | Adaptive PPL (mean ± std) | Parameters |",
               "|---|---:|---:|---:|",
@@ -77,15 +80,33 @@ jobs:
               )
           lines += [
               "",
-              "Exploratory synthetic pilot only; not evidence of general superiority.",
-              "See the uploaded JSON artifact for per-seed metrics and graph-memory statistics.",
+              "### Gate diagnostics (mean activation)",
+              "",
+              "| Ablation | Reset gate | Update gate | Mean graph-readout norm |",
+              "|---|---:|---:|---:|",
+          ]
+          for key, label in (
+              ("reset_only", "Reset only"),
+              ("update_only", "Update only"),
+              ("full", "Full"),
+          ):
+              diag = data["summary"][key]["gate_diagnostics"]
+              lines.append(
+                  f"| {label} | {diag['reset_gate']['mean']['mean']:.4f} "
+                  f"| {diag['update_gate']['mean']['mean']:.4f} "
+                  f"| {diag['graph_readout_norm_mean']['mean']:.4f} |"
+              )
+          lines += [
+              "",
+              "Exploratory small synthetic pilot only; not evidence of general superiority.",
+              "The raw artifact includes per-seed metrics, saturation, variance, and memory statistics.",
           ]
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
-              handle.write("\\n".join(lines) + "\\n")
+              handle.write("\n".join(lines) + "\n")
           PY
-      - name: Upload benchmark results
+      - name: Upload gate-ablation results
         uses: actions/upload-artifact@v4
         with:
-          name: dansn-conditioned-gru-three-seed-results
+          name: dansn-gru-gate-ablation-results
           path: benchmark-results/
           if-no-files-found: error
