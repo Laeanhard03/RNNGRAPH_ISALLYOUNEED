@@ -64,3 +64,8 @@ Use the full corpus only after the bounded run is stable. The PG-19 loader prepa
 - Repeat with multiple seeds and both datasets before making claims about superiority.
 
 The token budgets are explicit controls, not claims that a small sample represents the whole upstream corpus. Increase them in stages (for example, 100k, 500k, 1m, then larger) and record the exact limits in each result artifact.
+
+
+## Four-gate DG-GRU
+
+The current four-gate implementation is on the follow-on branch **feature/dg-gru-four-gate-control**. It adds update, reset, memory-injection, and persistent-write gates and is included as a fifth system in the real-corpus benchmark runner. See [FOUR_GATE_ARCHITECTURE.md](FOUR_GATE_ARCHITECTURE.md). Dataset budgets and static/prequential evaluation rules remain the same.
