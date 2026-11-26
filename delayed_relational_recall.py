@@ -455,7 +455,7 @@ def run_delayed_recall(
         )
         # evaluate_plain_queries on [] starts with zero hidden state; it is the
         # recurrent-only control for the state-reset condition.
-        results[str(delay)] = {
+        results["results"][str(delay)] = {
             "delay_distractor_facts": delay,
             "plain_gru_reset": plain_reset,
             "plain_gru_continuous": plain_metrics,
@@ -470,11 +470,13 @@ def run_delayed_recall(
     return results
 
 
-def run_multi_seed(
-    seeds: Sequence[int] = (7, 13, 21),
-    **kwargs,
+def aggregate_multi_seed_results(
+    runs: Sequence[Dict[str, object]],
+    seeds: Sequence[int],
 ) -> Dict[str, object]:
-    runs = [run_delayed_recall(seed=int(seed), **kwargs) for seed in seeds]
+    """Aggregate per-delay recall metrics across independently seeded runs."""
+    if not runs:
+        raise ValueError("at least one run is required")
     delays = list(runs[0]["results"].keys())
     metric_keys = [
         "plain_gru_reset", "plain_gru_continuous",
@@ -497,18 +499,37 @@ def run_multi_seed(
                 if optional in sample:
                     keys.append(optional)
             summary[delay][metric] = {
-                key: summarize([run["results"][delay][metric][key] for run in runs])
+                key: summarize([
+                    float(run["results"][delay][metric][key]) for run in runs
+                ])
                 for key in keys
             }
+        summary[delay]["persistent_graph_nodes"] = summarize([
+            float(run["results"][delay]["persistent_graph_nodes"]) for run in runs
+        ])
+        summary[delay]["persistent_memory_paths"] = summarize([
+            float(run["results"][delay]["persistent_memory_paths"]) for run in runs
+        ])
+
     return {
-        "seeds": list(seeds),
+        "seeds": [int(seed) for seed in seeds],
         "summary": summary,
-        "runs": runs,
+        "runs": list(runs),
         "interpretation": (
             "Synthetic pilot only. Mean/std describe seed variation on this generated "
             "task; they are not evidence of broad language or factual generalization."
         ),
     }
+
+
+def run_multi_seed(
+    seeds: Sequence[int] = (7, 13, 21),
+    **kwargs,
+) -> Dict[str, object]:
+    if not seeds:
+        raise ValueError("at least one seed is required")
+    runs = [run_delayed_recall(seed=int(seed), **kwargs) for seed in seeds]
+    return aggregate_multi_seed_results(runs, seeds)
 
 
 def main():
