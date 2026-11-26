@@ -53,7 +53,7 @@ jobs:
       - name: Test delayed relational recall task
         run: python test_delayed_relational_recall.py
       - name: Smoke-test delayed relational recall benchmark
-        run: python delayed_relational_recall.py --subjects 12 --distractors 8 --delays 0,4,8 --epochs 1 --hidden-size 16 --window-size 9 --graph-depth 8 --chunk-size 8 --output delayed-recall-ci-results.json
+        run: python delayed_relational_recall.py --subjects 24 --distractors 24 --delays 0,8,24 --epochs 3 --hidden-size 32 --window-size 9 --graph-depth 8 --chunk-size 16 --seeds 7,13,21 --output delayed-recall-ci-results.json
       - name: Upload delayed recall smoke result
         uses: actions/upload-artifact@v4
         with:
