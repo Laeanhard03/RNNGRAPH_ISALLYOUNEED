@@ -99,3 +99,80 @@ The next experiment should add an explicit, causally valid memory-read objective
 6. Report query accuracy, NLL, MRR, target reachability, memory visibility, and state-reset versus continuous-state results separately.
 
 Keep `agi.py` unchanged until the persistent-memory mechanism demonstrates repeatable gains on this harder task.
+
+
+## Interleaved two-hop recall and exact-entity bridge pilot — 2026-11-27
+
+The next harder test has now been run on three seeds. Rather than keeping the two relation edges adjacent, the test stream is:
+
+```text
+person owns vehicle
+... 8 unrelated two-hop fact pairs ...
+vehicle parked place
+... optional trailing distractors ...
+where person -> predict place
+```
+
+### Configuration and causal safeguards
+
+- Seeds 7, 13, 21.
+- 24 people, 24 vehicles and 24 places; 18 query-supervised subjects and 6 held-out subjects per seed (18 held-out queries per delay across seeds).
+- 8 unrelated distractor fact pairs inserted between the two relation groups; additional 16 distractor pairs are available as trailing delay material.
+- Delayed conditions: 0 and 8 trailing distractor pairs.
+- Three epochs; hidden size 32; window size 9; graph depth 8; chunk size 16.
+- Train/test relationship mappings are independently randomized.
+- Test facts are ingested causally with neural weights frozen. Link construction receives only observed fact tokens, never query/answer labels. Query targets are not written into the graph.
+- Comparison: plain GRU, read-only DANSN-GRU, persistent DANSN-RNN with an ordinary unlinked trie, and a matched persistent model with an exact-token entity bridge.
+
+### What the entity bridge does
+
+The original trie stores context-specific paths. The first-hop context `person owns vehicle` and second-hop context `vehicle parked place` are therefore separate branches when unrelated facts are interleaved between them. The experiment adds one explicit cross-context edge when the exact same vehicle token ID occurs in both observed facts, then aliases the already-written target-bearing memory vector onto the joined path. This is a task-specific exact-identity rule, not learned semantic entity resolution.
+
+Across all three seeds, the linker observed 24 first-hop and 24 second-hop facts per run, added 24 cross-links and 24 memory aliases, and left zero entities unlinked.
+
+### Aggregate results (mean ± population standard deviation)
+
+At delay 0 (no additional trailing distractors):
+
+| System | Recurrent state | Accuracy | Mean NLL | MRR | Target reachable | Target-bearing memory visible |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Plain GRU | Reset | 5.56% ± 7.86 pp | 4.799 ± 0.055 | 0.127 ± 0.062 | — | — |
+| Read-only DANSN-GRU | Reset | 5.56% ± 7.86 pp | 4.363 ± 0.194 | 0.149 ± 0.104 | 0% | — |
+| Persistent DANSN-RNN, unlinked | Reset | 0% | 4.181 ± 0.270 | 0.100 ± 0.035 | 0% | 0% |
+| Persistent DANSN-RNN, entity-linked | Reset | 0% | 4.133 ± 0.305 | 0.097 ± 0.032 | 100% | 100% |
+| Persistent DANSN-RNN, unlinked | Preserved | 0% | 4.993 ± 0.285 | 0.056 ± 0.012 | 0% | 0% |
+| Persistent DANSN-RNN, entity-linked | Preserved | 0% | 4.828 ± 0.130 | 0.062 ± 0.014 | 100% | 100% |
+
+At delay 8 (eight additional trailing distractor pairs):
+
+| System | Recurrent state | Accuracy | Mean NLL | MRR | Target reachable | Target-bearing memory visible |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Persistent DANSN-RNN, unlinked | Reset | 0% | 4.181 ± 0.270 | 0.100 ± 0.035 | 0% | 0% |
+| Persistent DANSN-RNN, entity-linked | Reset | 0% | 4.133 ± 0.305 | 0.097 ± 0.032 | 100% | 100% |
+| Persistent DANSN-RNN, unlinked | Preserved | 0% | 4.877 ± 0.377 | 0.063 ± 0.016 | 0% | 0% |
+| Persistent DANSN-RNN, entity-linked | Preserved | 0% | 4.651 ± 0.348 | 0.068 ± 0.013 | 100% | 100% |
+| Read-only DANSN-GRU | Preserved | 0% | 5.242 ± 0.470 | 0.049 ± 0.022 | 0% | — |
+
+The key finding is structural, not yet an answer-accuracy win:
+- Ordinary persistent trie traversal retained unrelated active memory paths in every query, but could not reach the correct place or expose its target-bearing memory (0% for both diagnostics).
+- The exact-entity bridge made the correct target reachable and its corresponding stored memory vector visible in **100%** of held-out queries at both delays.
+- Despite this, the linked model's top-1 answer accuracy remained **0/18 at both delays**. NLL and MRR improved modestly over the unlinked persistent model in the continuous-state condition, but this did not translate into a correct answer.
+- The reset-state MRR at delay 0 was slightly lower for the linked model than the unlinked model. Therefore, do not describe linking as a general performance improvement.
+
+The unlinked persistent model had 2,090 graph nodes and 255 memory paths at delay 0, increasing to 2,626 nodes and 319 memory paths at delay 8. The linker added 24 cross-links and 24 memory aliases per seed; all observed entities were linked.
+
+### Verification
+
+GitHub Actions [45868295697](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45868295697) completed successfully on commit `7525758f61462e3a5dcb019c72c337c47504ce28`. It passed compilation, canonical DANSN tests (14/14), earlier recurrent tests (4/4), persistent-memory tests (8/8), the existing continual-learning benchmark, the original delayed-recall tests and benchmark, the expanded interleaved relational tests and three-seed benchmark, memory-read supervision tests (5/5), the three-seed memory-read benchmark, and artifact uploads.
+
+A separate diagnostic now reports `target_bearing_memory_visible_fraction`, which only counts memory paths whose final token is the correct target. This is stricter than generic active-memory visibility and avoids mistaking unrelated memory activity for retrieval of the answer-bearing state.
+
+### Engineering conclusion and next step
+
+This result isolates two distinct capabilities:
+1. **Structural fact joining:** exact repeated-entity linking can bridge context-specific trie branches and expose the correct memory vector.
+2. **Answer decoding:** the existing learned readout/output path still does not select the correct answer, even when the correct target is reachable and its memory vector is active.
+
+The next experiment should instrument attention weights and contribution scores on the exact target-bearing path, then test a query-time candidate/pointer decoder that scores the reachable place nodes directly. The decoder must use only the observed graph and current query, not the held-out label. Compare it against the existing vocabulary output layer and keep the exact-entity link as an explicit ablation. Do not merge the bridge or a new decoder into the persistent-memory core until its gains repeat across larger independent knowledge bases.
+
+Canonical `agi.py` (SHA `4abc472fd62e3d2807dc9709894d9cb9ca6d12dc`) and `persistent_dansn_rnn.py` (SHA `e789868ea7b406eb2213f7f7b91d90d2eddb1174`) remain unchanged.
