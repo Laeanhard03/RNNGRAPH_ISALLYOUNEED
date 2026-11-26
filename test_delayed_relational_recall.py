@@ -129,6 +129,12 @@ def test_unlinked_trie_stores_both_facts_but_cannot_join_their_context_paths():
         assert any(path and path[-1] == vehicle_id for path in active)
         assert not any(path and path[-1] == place_id for path in active)
 
+    metrics = evaluate_hybrid_queries(
+        model, data["test_fact_ids"], data["test_query_ids"], True
+    )
+    assert metrics["target_reachable_fraction"] == 0.0
+    assert metrics["target_bearing_memory_visible_fraction"] == 0.0
+
 
 def test_observed_entity_linking_joins_paths_and_makes_memory_visible():
     data = build_recall_data(
@@ -154,6 +160,7 @@ def test_observed_entity_linking_joins_paths_and_makes_memory_visible():
     )
     assert metrics["target_reachable_fraction"] == 1.0
     assert metrics["target_memory_visible_fraction"] > 0.0
+    assert metrics["target_bearing_memory_visible_fraction"] == 1.0
 
 
 def test_entity_linking_does_not_change_weights_or_add_query_answer_writes():
