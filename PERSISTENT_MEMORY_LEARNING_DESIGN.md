@@ -346,3 +346,6 @@ The experimental `link_shared_entity_paths` operation acts only on the observed 
 This is an exact-token identity rule, not learned semantic linking. It uses no held-out query answer labels and does not modify model parameters. The experiment compares ordinary trie traversal against the explicit bridge. It measures answer accuracy, target reachability, memory-path visibility, bridge counts, and unlinked entities separately.
 
 Do not treat this linker as part of the core architecture yet. Its purpose is to isolate whether context-specific trie paths need an explicit shared-entity connection mechanism. A positive result would motivate learning or generalizing the bridge operation; it would not prove general semantic reasoning. Canonical `agi.py` and `persistent_dansn_rnn.py` remain unchanged.
+
+
+The interleaved evaluator distinguishes `target_memory_visible_fraction` (any persistent-memory path in the active neighborhood) from `target_bearing_memory_visible_fraction` (a memory path in that neighborhood whose final token is the correct answer). Only the latter establishes that the correct target-bearing memory vector is exposed to the query.
