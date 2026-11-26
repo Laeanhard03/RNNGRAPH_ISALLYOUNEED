@@ -107,3 +107,12 @@ The evaluator reports two distinct outcomes:
 - **Predictive mechanism:** top-1 value accuracy and query negative log-likelihood after delay.
 
 The comparison includes plain GRU, readout-fusion, three-path gate-conditioned GRU, full DG-GRU, and four-gate ablations. This synthetic benchmark tests one-shot sequence association and delayed retrieval only. It does not test general semantic idea formation or multi-hop reasoning across distinct graph branches.
+
+
+## Retrieval suffix backoff correction — 2026-11-27
+
+The first synthetic delayed-recall run found a context-selection failure shared by the persistent DANSN recurrent adapters: a newly observed, longer suffix ending at the current query key could be terminal (no answer continuation) and shadow a shorter suffix that had the stored key/value continuation. The path and persistent vector had been written, but the readout neighborhood did not include that stored child.
+
+`PersistentDANSNRNN._longest_context_path()` now prefers the longest matching suffix whose graph node has outgoing continuations or has its own persistent vector. It falls back to the longest existing terminal suffix only when no more useful suffix exists. A regression test simulates the real stream order, including observing the query marker and key after distractors, then checks that retrieval backs off to the association prefix and activates its value child.
+
+This is a retrieval correctness fix to the shared experimental recurrent adapter; canonical `agi.py` remains unchanged. The synthetic benchmark is rerun after this correction. Do not use the first run's 0% active-path coverage as a model-capability conclusion; it exposed the matcher bug.
