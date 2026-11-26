@@ -1,0 +1,70 @@
+name: DANSN associative recall benchmark
+
+on:
+  push:
+    branches:
+      - feature/dg-gru-four-gate-control
+    paths:
+      - "experiments/dansn_conditioned_gru_gates/associative_recall.py"
+      - "experiments/dansn_conditioned_gru_gates/test_associative_recall.py"
+      - ".github/workflows/dansn-associative-recall.yml"
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: Comma-separated random seeds
+        required: true
+        default: "7,13,21"
+        type: string
+      epochs:
+        description: Training passes over generated association episodes
+        required: true
+        default: "2"
+        type: string
+      test_delay:
+        description: Number of distractor tokens before recall
+        required: true
+        default: "64"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  associative-recall:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out experimental branch
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-recurrent.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-recurrent.txt pytest
+      - name: Run experiment tests
+        run: python -m pytest -q experiments/dansn_conditioned_gru_gates/
+      - name: Generate synthetic associations and train/evaluate systems
+        env:
+          SEEDS: ${{ inputs.seeds || '7,13,21' }}
+          EPOCHS: ${{ inputs.epochs || '2' }}
+          TEST_DELAY: ${{ inputs.test_delay || '64' }}
+        run: |
+          python -m experiments.dansn_conditioned_gru_gates.associative_recall \
+            --seeds "$SEEDS" \
+            --epochs "$EPOCHS" \
+            --test-delay "$TEST_DELAY" \
+            --output benchmark-results/associative_recall_results.json \
+            --data-output benchmark-results/associative_recall_dataset.json
+      - name: Upload synthetic data and benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: dansn-associative-recall-results
+          path: |
+            benchmark-results/associative_recall_results.json
+            benchmark-results/associative_recall_dataset.json
+          if-no-files-found: error
