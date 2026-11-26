@@ -113,6 +113,7 @@ def generate_dataset(
     test_stream: list[int] = []
     support_paths: dict[int, tuple[int, ...]] = {}
     query_paths: dict[int, tuple[int, ...]] = {}
+    query_delays: dict[int, int] = {}
     support_positions_by_key: dict[int, int] = {}
 
     support_order = list(test_key_words)
