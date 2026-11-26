@@ -34,4 +34,4 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-recurrent.txt pytest
       - name: Run DANSN-conditioned GRU tests
-        run: python -m pytest -q experiments/dansn_conditioned_gru_gates/test_model.py
+        run: python -m pytest -q experiments/dansn_conditioned_gru_gates/
