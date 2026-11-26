@@ -36,3 +36,9 @@ jobs:
         run: python test_persistent_dansn_rnn.py
       - name: Smoke-test continual-learning comparison
         run: python benchmark_continual_learning.py --epochs 1 --output benchmark-ci-results.json
+      - name: Upload benchmark smoke result
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-smoke-result
+          path: benchmark-ci-results.json
+          if-no-files-found: error
