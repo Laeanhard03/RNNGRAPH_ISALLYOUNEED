@@ -302,3 +302,20 @@ The two edges in the main chain are adjacent in the serialized fact stream (`per
 - With recurrent state reset, plain GRU top-1 accuracy was 0%; read-only DANSN-GRU was 0%; persistent DANSN-RNN was 5.56% ± 7.86 percentage points (one correct answer among 18 held-out queries). Mean NLL/MRR were 4.970 ± 0.085 / 0.034 ± 0.011 for GRU, 4.183 ± 0.296 / 0.127 ± 0.033 for read-only hybrid, and 4.164 ± 0.099 / 0.153 ± 0.093 for persistent hybrid. Target reachability and persistent-memory visibility were both 100% for the writable hybrid.
 - With recurrent state preserved, persistent DANSN-RNN had 0% accuracy at all delays and worse mean NLL than the read-only hybrid (5.081 vs 4.854 at delay 0; 5.267 vs 4.837 at delay 8; 5.260 vs 4.914 at delay 24). This suggests the current memory readout can be visible and modestly help after a recurrent reset, but does not yet integrate reliably with continuous recurrent state.
 - The results are preliminary: one generated fact grammar, three seeds, 18 held-out queries total, fixed shared entity vocabulary, and one contiguous serialized two-hop fact chain followed by distractors. This does not establish robust relational reasoning or arbitrary fact joining. See [DELAYED_RELATIONAL_RECALL_PILOT_RESULTS.md](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/blob/main/DELAYED_RELATIONAL_RECALL_PILOT_RESULTS.md) for full per-delay metrics and limitations.
+
+
+## Memory-read supervised objective — experimental milestone
+
+The next training hypothesis is to teach the DANSN read vector to represent the answer-bearing content directly, rather than relying only on the main next-token output layer to infer it. In the delayed two-hop task, add a contrastive answer objective over the fixed place-token embeddings:
+
+```text
+z = normalize(W_mem · r_t)
+s_i = dot(z, normalize(E[place_i])) / τ
+L = L_next + λ · cross_entropy(s, correct_place_index)
+```
+
+Here `r_t` is the differentiable DANSN graph-read vector returned by the query step, `E` is the model's token-embedding table, `τ` is a temperature, and `λ` weights the auxiliary objective. The label is applied only after the query forward pass and is never passed to the graph's `observe_target` operation. This preserves the causal memory boundary: facts create the memory, while the query label trains how to decode the retrieved state.
+
+The implementation is in `memory_read_supervision.py`. Its experiment contrasts read-only DANSN-GRU, persistent next-token-only training, and persistent training with the auxiliary read objective. A matched-weight read-only ablation evaluates the same learned answer head on graph topology without persistent vectors. Test-time fact ingestion is online with neural weights frozen; query scoring does not write answers.
+
+The auxiliary read head is a research probe, not yet a change to the main architecture. Promote it into the persistent adapter only if multi-seed held-out results show a reliable gain over the next-token-only and matched read-only baselines. The canonical `agi.py` remains unchanged.
