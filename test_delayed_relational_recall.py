@@ -39,7 +39,7 @@ def test_online_context_ingestion_grows_graph_and_persistent_memory_without_weig
     brain = Brain(vocab=copy.deepcopy(data["vocab"]))
     model = _make_hybrid(
         brain.engine, len(data["vocab"].word_to_id) + 1,
-        hidden_size=16, window_size=8, graph_depth=8,
+        hidden_size=16, window_size=9, graph_depth=8,
     )
     before_parameters = [parameter.detach().clone() for parameter in model.parameters()]
     before = model.graph_stats()
@@ -62,7 +62,7 @@ def test_subject_prefix_can_reach_the_two_hop_location_in_graph():
     brain = Brain(vocab=copy.deepcopy(data["vocab"]))
     model = _make_hybrid(
         brain.engine, len(data["vocab"].word_to_id) + 1,
-        hidden_size=16, window_size=8, graph_depth=8,
+        hidden_size=16, window_size=9, graph_depth=8,
     )
     ingest_context_online(model, data["test_fact_ids"])
 
@@ -71,6 +71,12 @@ def test_subject_prefix_can_reach_the_two_hop_location_in_graph():
         assert start == (person_id,)
         active, _incoming = model._active_subgraph(start)
         assert any(path[-1] == target_id for path in active if path)
+        # The full two-hop memory vector must remain under this subject path,
+        # so querying the subject can actually retrieve the stored state.
+        assert any(
+            path and path[0] == person_id and target_id in path
+            for path in model.node_memory
+        )
 
 
 def test_query_evaluation_scores_without_mutating_graph_or_persistent_vectors():
@@ -78,7 +84,7 @@ def test_query_evaluation_scores_without_mutating_graph_or_persistent_vectors():
     brain = Brain(vocab=copy.deepcopy(data["vocab"]))
     model = _make_hybrid(
         brain.engine, len(data["vocab"].word_to_id) + 1,
-        hidden_size=16, window_size=8, graph_depth=8,
+        hidden_size=16, window_size=9, graph_depth=8,
     )
     ingest_context_online(model, data["test_fact_ids"])
     before_nodes = model.graph_stats()["nodes"]
