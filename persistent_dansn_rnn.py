@@ -134,14 +134,18 @@ class PersistentDANSNRNN(nn.Module):
 
         A just-observed query prefix can create a longer terminal path (for
         example, [distractor, query_marker, key]) immediately before the model
-        predicts the associated value. Blindly choosing that terminal path
-        shadows a shorter learned association prefix ([query_marker, key]).
-        Prefer the longest existing suffix with outgoing synapses or its own
-        persistent vector; retain the longest terminal suffix only as fallback.
+        predicts the associated value. That path may also hold a vector written
+        after observing the key, but it has no answer continuation and must not
+        shadow a shorter association prefix ([query_marker, key]).
+        Prefer the longest suffix with outgoing synapses. If none exists, fall
+        back to the longest suffix with persistent memory, then any existing
+        suffix. This favors a path that can supply candidate continuations while
+        preserving memory-only reads when no continuation-bearing path exists.
         """
         max_context = max(self.window_size - 1, 1)
         first = max(0, len(history) - max_context)
         longest_existing: Optional[PathKey] = None
+        longest_memory: Optional[PathKey] = None
         for start in range(first, len(history)):
             path = tuple(int(x) for x in history[start:])
             node = self._path_nodes.get(path)
@@ -149,9 +153,11 @@ class PersistentDANSNRNN(nn.Module):
                 continue
             if longest_existing is None:
                 longest_existing = path
-            if node.synapses or path in self.node_memory:
+            if longest_memory is None and path in self.node_memory:
+                longest_memory = path
+            if node.synapses:
                 return path
-        return longest_existing
+        return longest_memory or longest_existing
 
     def _active_subgraph(self, start_path: Optional[PathKey]):
         if start_path is None or start_path not in self._path_nodes:
