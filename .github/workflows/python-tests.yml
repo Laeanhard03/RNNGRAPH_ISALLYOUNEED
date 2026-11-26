@@ -35,7 +35,7 @@ jobs:
       - name: Compile source
         run: |
           python -m py_compile agi.py recurrent_graph.py persistent_dansn_rnn.py
-          python -m py_compile test_agi.py test_recurrent_graph.py test_persistent_dansn_rnn.py benchmark_continual_learning.py
+          python -m py_compile test_agi.py test_recurrent_graph.py test_persistent_dansn_rnn.py test_delayed_relational_recall.py benchmark_continual_learning.py delayed_relational_recall.py
       - name: Test canonical DANSN
         run: python test_agi.py
       - name: Test earlier recurrent adapter
@@ -49,4 +49,14 @@ jobs:
         with:
           name: benchmark-smoke-result
           path: benchmark-ci-results.json
+          if-no-files-found: error
+      - name: Test delayed relational recall task
+        run: python test_delayed_relational_recall.py
+      - name: Smoke-test delayed relational recall benchmark
+        run: python delayed_relational_recall.py --subjects 12 --distractors 8 --delays 0,4,8 --epochs 1 --hidden-size 16 --window-size 10 --graph-depth 8 --chunk-size 8 --output delayed-recall-ci-results.json
+      - name: Upload delayed recall smoke result
+        uses: actions/upload-artifact@v4
+        with:
+          name: delayed-recall-smoke-result
+          path: delayed-recall-ci-results.json
           if-no-files-found: error
