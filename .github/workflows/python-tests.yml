@@ -60,8 +60,8 @@ jobs:
           name: delayed-recall-smoke-result
           path: delayed-recall-ci-results.json
           if-no-files-found: error
-      - name: Smoke-test interleaved relational recall and entity linking
-        run: python delayed_relational_recall.py --subjects 12 --distractors 8 --interleave-facts 2 --delays 0,2 --epochs 1 --hidden-size 16 --window-size 9 --graph-depth 8 --chunk-size 16 --seeds 7,13,21 --output interleaved-relational-ci-results.json
+      - name: Run three-seed interleaved relational recall and entity linking
+        run: python delayed_relational_recall.py --subjects 24 --distractors 24 --interleave-facts 8 --delays 0,8 --epochs 3 --hidden-size 32 --window-size 9 --graph-depth 8 --chunk-size 16 --seeds 7,13,21 --output interleaved-relational-ci-results.json
       - name: Upload interleaved relational recall result
         uses: actions/upload-artifact@v4
         with:
