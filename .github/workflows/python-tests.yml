@@ -3,7 +3,15 @@ name: Python tests
 on:
   push:
     branches: [main]
+    paths:
+      - "**.py"
+      - "requirements-recurrent.txt"
+      - ".github/workflows/**"
   pull_request:
+    paths:
+      - "**.py"
+      - "requirements-recurrent.txt"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 permissions:
