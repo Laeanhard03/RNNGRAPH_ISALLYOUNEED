@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/dansn-gated-gru-real-corpora
+      - feature/dg-gru-four-gate-control
     paths:
       - ".github/workflows/dansn-gru-real-corpus.yml"
   workflow_dispatch:
