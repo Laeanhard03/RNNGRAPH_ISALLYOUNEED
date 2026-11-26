@@ -50,8 +50,16 @@ def _new_hybrid(vocab, hidden_size: int, window_size: int, kind: str):
         return DANSNConditionedGRU(**common, gate_ablation="full")
     if kind == "gate_update_only":
         return DANSNConditionedGRU(**common, gate_ablation="update_only")
-    if kind == "four_gate":
-        return DANSNFourGateGRU(**common, gate_ablation="full")
+    four_gate_ablations = {
+        "four_gate": "full",
+        "four_gate_no_memory_injection": "no_memory_injection",
+        "four_gate_no_persistent_write": "no_persistent_write",
+        "four_gate_no_graph_evidence": "no_graph_evidence",
+    }
+    if kind in four_gate_ablations:
+        return DANSNFourGateGRU(
+            **common, gate_ablation=four_gate_ablations[kind]
+        )
     raise ValueError(f"unknown hybrid kind: {kind}")
 
 
@@ -91,9 +99,16 @@ def run_one_seed(
     }
 
     # Hybrid baselines and gate placements use independent empty graph memories.
-    for offset, kind in enumerate(
-        ("readout_fusion", "gate_update_only", "gate_full", "four_gate"), start=1
-    ):
+    hybrid_kinds = (
+        "readout_fusion",
+        "gate_update_only",
+        "gate_full",
+        "four_gate",
+        "four_gate_no_memory_injection",
+        "four_gate_no_persistent_write",
+        "four_gate_no_graph_evidence",
+    )
+    for offset, kind in enumerate(hybrid_kinds, start=1):
         torch.manual_seed(seed + offset)
         model = _new_hybrid(
             corpus.brain.vocab, hidden_size, window_size, kind
@@ -169,7 +184,16 @@ def run_benchmark(
         for seed in seed_list
     ]
 
-    systems = ("plain_gru", "readout_fusion", "gate_update_only", "gate_full", "four_gate")
+    systems = (
+        "plain_gru",
+        "readout_fusion",
+        "gate_update_only",
+        "gate_full",
+        "four_gate",
+        "four_gate_no_memory_injection",
+        "four_gate_no_persistent_write",
+        "four_gate_no_graph_evidence",
+    )
     summary = {}
     for system in systems:
         summary[system] = {
