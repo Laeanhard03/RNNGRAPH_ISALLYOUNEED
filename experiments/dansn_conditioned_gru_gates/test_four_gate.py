@@ -293,3 +293,55 @@ def test_four_gate_ablations_preserve_shapes_and_disable_selected_paths():
         streams[3][1][0], [streams[3][1][0]]
     )
     assert torch.count_nonzero(no_evidence_trace["graph_evidence"]).item() == 0
+
+
+def test_retrieval_backs_off_from_new_terminal_query_prefix_after_distractors():
+    """A new distractor+query prefix must not shadow the stored key/value path."""
+    torch.manual_seed(47)
+    brain = Brain()
+    ctx, key, value, noise_a, noise_b = brain.vocab.tokenize(
+        "recallctx keyalpha valueomega noisea noiseb"
+    )
+    model = DANSNFourGateGRU(
+        brain.engine,
+        len(brain.vocab.word_to_id) + 1,
+        hidden_size=16,
+        window_size=4,
+        graph_depth=3,
+        message_rounds=1,
+        max_active_nodes=32,
+        max_memory_nodes=100,
+    )
+
+    # Store the held-out association.
+    _, state, _ = model.forward_step(key, [ctx, key])
+    state.write_gate = torch.ones_like(state.write_gate)
+    model.observe_target([ctx, key], value, state)
+
+    # Replay the actual causal prefix through the model. Observing the key
+    # after the distractors creates a longer terminal path
+    # (noise_b, ctx, key) immediately before the value is queried.
+    history = [ctx, key, value]
+    recurrent_state = model.initial_state()
+    for target in (noise_a, noise_b, ctx, key):
+        current = history[-1]
+        _, step_state, _ = model.forward_step(
+            current, history, recurrent_state
+        )
+        step_state.write_gate = torch.ones_like(step_state.write_gate)
+        model.observe_target(history, target, step_state)
+        history.append(target)
+        recurrent_state = step_state.detached()
+
+    terminal_suffix = (noise_b, ctx, key)
+    association_prefix = (ctx, key)
+    expected_path = (ctx, key, value)
+    assert terminal_suffix in model._path_nodes
+    assert not model._path_nodes[terminal_suffix].synapses
+    assert value in model._path_nodes[association_prefix].synapses
+
+    _, _query_state, trace = model.forward_step(
+        key, history, model.initial_state()
+    )
+    assert trace["matched_path"] == association_prefix
+    assert expected_path in trace["active_paths"]
