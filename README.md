@@ -116,7 +116,9 @@ Run:
 ```bash
 python test_delayed_relational_recall.py
 python delayed_relational_recall.py --subjects 24 --distractors 48 --delays 0,8,24,48 --epochs 3
-python delayed_relational_recall.py --subjects 24 --distractors 48 --delays 0,8,24,48 --epochs 3 --seeds 7,13,21
+python delayed_relational_recall.py --subjects 24 --distractors 24 --delays 0,8,24 --epochs 3 --hidden-size 32 --window-size 9 --graph-depth 8 --chunk-size 16 --seeds 7,13,21
 ```
 
 Metrics include exact answer accuracy, mean negative log-likelihood, mean reciprocal rank, target reachability within the retrieved graph neighborhood, and whether a persistent-memory path was among retrieved nodes. Static query scoring does not reveal the answer to the model before scoring it. This is a controlled synthetic memory task, not a natural-language benchmark.
+
+The three-seed pilot and limitations are recorded in [DELAYED_RELATIONAL_RECALL_PILOT_RESULTS.md](DELAYED_RELATIONAL_RECALL_PILOT_RESULTS.md). In the recurrent-state-reset condition, the persistent hybrid reached 5.56% ± 7.86% top-1 accuracy (one correct answer in 18 held-out queries) versus 0% for the read-only hybrid, with slightly better NLL/MRR. With recurrent state preserved, the persistent hybrid underperformed the read-only hybrid at all three distractor delays. The correct target was reachable and a stored memory path was visible in all writable-hybrid queries, so the current bottleneck is translating retrieved state into the right answer. This is a weak pilot signal, not reliable recall or proof of generalization.
