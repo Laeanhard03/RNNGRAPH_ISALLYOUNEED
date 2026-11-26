@@ -9,6 +9,7 @@ from delayed_relational_recall import build_recall_data, ingest_context_online, 
 from memory_read_supervision import (
     MemoryReadAnswerHead,
     _place_candidates,
+    _tie_aware_rank_metrics,
     aggregate_runs,
     run_memory_supervision,
     train_memory_supervised_query,
@@ -96,6 +97,14 @@ def test_small_memory_supervision_run_reports_all_comparison_systems():
     assert math.isfinite(metrics["memory_read_head_persistent_reset"]["mean_nll"])
 
 
+def test_tied_scores_use_average_rank_instead_of_false_rank_one():
+    logits = torch.zeros(4)
+    nll, rank, prediction = _tie_aware_rank_metrics(logits, target_index=3)
+    assert math.isclose(nll, math.log(4), rel_tol=1e-6)
+    assert rank == 2.5
+    assert prediction == 0
+
+
 def test_multi_seed_aggregator_summarizes_memory_head_metrics():
     metric = {
         "accuracy": 0.25,
@@ -133,6 +142,7 @@ if __name__ == "__main__":
         test_memory_read_head_aligns_graph_readout_to_place_embeddings,
         test_memory_supervised_query_updates_weights_without_writing_answer_to_graph,
         test_small_memory_supervision_run_reports_all_comparison_systems,
+        test_tied_scores_use_average_rank_instead_of_false_rank_one,
         test_multi_seed_aggregator_summarizes_memory_head_metrics,
     ]
     for check in checks:
