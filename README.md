@@ -208,3 +208,8 @@ The new branch adds:
 See [the dataset and run guide](experiments/dansn_conditioned_gru_gates/DATASETS.md).
 Dataset binaries are downloaded/cached at run time and are not committed here.
 Start with bounded token budgets before attempting a full PG-19 run.
+
+
+## Four-gate DANSN-GRU experiment
+
+The follow-on branch **feature/dg-gru-four-gate-control** adds a distinct four-gate DG-GRU variant with DANSN-conditioned update, reset, memory-injection, and persistent-write gates. Its persistent-write gate is computed before target reveal and applied only after the target prediction has been scored. See [FOUR_GATE_ARCHITECTURE.md](experiments/dansn_conditioned_gru_gates/FOUR_GATE_ARCHITECTURE.md). It also adds this variant to the real-corpus comparison runner. The branch is experimental; no performance improvement is assumed.
