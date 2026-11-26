@@ -481,3 +481,74 @@ def test_prediction_loss_backpropagates_through_persistent_memory_decoder_channe
     assert torch.isfinite(memory_slice).all()
     assert torch.linalg.vector_norm(memory_slice).item() > 0.0
     assert torch.linalg.vector_norm(trace["memory_output_context"]).item() > 0.0
+
+
+def test_memory_gated_pointer_distribution_copies_stored_next_token():
+    torch.manual_seed(73)
+    brain = Brain()
+    ctx, key, value = brain.vocab.tokenize(
+        "recallctx keyalpha valueomega"
+    )
+    model = make_model(brain)
+    _, support_state, _ = model.forward_step(key, [ctx, key])
+    support_state.write_gate = torch.ones_like(support_state.write_gate)
+    model.observe_target([ctx, key], value, support_state)
+
+    logits, _state, trace = model.forward_step(
+        key, [ctx, key], model.initial_state()
+    )
+    pointer = trace["persistent_token_distribution"]
+
+    assert trace["pointer_available"] is True
+    assert pointer[value].item() == 1.0
+    assert torch.isclose(pointer.sum(), torch.tensor(1.0))
+    assert trace["effective_pointer_mix"].item() > 0.0
+    assert int(logits.argmax().item()) == value
+
+
+def test_no_memory_injection_ablation_disables_pointer_probability_mix():
+    torch.manual_seed(79)
+    brain = Brain()
+    ctx, key, value = brain.vocab.tokenize(
+        "recallctx keyalpha valueomega"
+    )
+    model = make_model(brain, gate_ablation="no_memory_injection")
+    _, support_state, _ = model.forward_step(key, [ctx, key])
+    support_state.write_gate = torch.ones_like(support_state.write_gate)
+    model.observe_target([ctx, key], value, support_state)
+
+    logits, _state, trace = model.forward_step(
+        key, [ctx, key], model.initial_state()
+    )
+
+    assert trace["pointer_available"] is True
+    assert trace["persistent_token_distribution"][value].item() == 1.0
+    assert trace["effective_pointer_mix"].item() == 0.0
+    expected = torch.log(trace["neural_probabilities"].clamp_min(1e-9))
+    assert torch.allclose(logits, expected)
+
+
+def test_prediction_loss_backpropagates_through_memory_pointer_gate():
+    torch.manual_seed(83)
+    brain = Brain()
+    ctx, key, value = brain.vocab.tokenize(
+        "recallctx keyalpha valueomega"
+    )
+    model = make_model(brain)
+    _, support_state, _ = model.forward_step(key, [ctx, key])
+    support_state.write_gate = torch.ones_like(support_state.write_gate)
+    model.observe_target([ctx, key], value, support_state)
+
+    logits, _state, trace = model.forward_step(
+        key, [ctx, key], model.initial_state()
+    )
+    assert trace["effective_pointer_mix"].item() > 0.0
+    loss = F.cross_entropy(logits.unsqueeze(0), torch.tensor([value]))
+    loss.backward()
+
+    memory_gate_grad = model.four_gate_cell.controller.weight.grad[
+        2 * model.hidden_size:3 * model.hidden_size
+    ]
+    assert memory_gate_grad is not None
+    assert torch.isfinite(memory_gate_grad).all()
+    assert torch.linalg.vector_norm(memory_gate_grad).item() > 0.0
