@@ -1,0 +1,2 @@
+-r requirements-recurrent.txt
+datasets>=3.0.0,<5.0
