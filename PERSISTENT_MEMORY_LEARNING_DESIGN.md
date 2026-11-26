@@ -328,3 +328,21 @@ The auxiliary read-head experiment is implemented in `memory_read_supervision.py
 Across three seeds and 18 held-out queries, the persistent memory-read answer head reached 2/18 correct when recurrent state was reset (11.11% ± 7.86 pp) and 1/18 when state was preserved (5.56% ± 7.86 pp). The matched-weight topology-only ablation was uniform: 0% accuracy, NLL 3.178, tie-aware MRR 0.08. The persistent head's MRR was higher (0.195 reset; 0.147–0.199 continuous), but its NLL remained worse than uniform (3.694–4.155), showing that its ranking signal is not reliably calibrated. The main next-token output head reached only 1/18 correct in reset mode and none with state preserved; NLL/MRR gains in continuous mode did not yield top-1 answers.
 
 Conclusion: the explicit objective helped the graph-read vector rank the correct answer occasionally, but did not establish reliable relational recall. Keep it experimental; do not merge it into the persistent-memory core. Next, increase independent knowledge-base/query counts, test relation edges separated by interleaved facts, and inspect target-path attention. Canonical `agi.py` and `persistent_dansn_rnn.py` remain unchanged.
+
+
+## Interleaved relational recall and entity-identity linking
+
+The original delayed two-hop test serialized each relation pair contiguously, so the context-specific path from a person could reach its vehicle and then the place without joining separated facts. The next test mode serializes all first-hop facts, inserts unrelated complete fact pairs, then serializes the second-hop facts. The only shared key between the two relation groups is the repeated vehicle token ID.
+
+The `build_recall_data(..., interleave_facts=N)` option inserts N unrelated fact pairs between the first- and second-hop groups; zero preserves the original task. `run_delayed_recall(..., interleave_facts=N)` trains on the same separated structure and evaluates held-out subjects under independently randomized test mappings.
+
+The experimental `link_shared_entity_paths` operation acts only on the observed token stream:
+1. Extract observed `person -> vehicle` and `vehicle -> place` facts.
+2. Find the context-specific DANSN node for the person-to-vehicle fact.
+3. Find the independently stored node branch for the matching vehicle-to-place fact.
+4. Add a cross-context synapse from the person-specific vehicle node to the observed `parked` continuation.
+5. Alias the already-written target-bearing persistent vector onto the joined path.
+
+This is an exact-token identity rule, not learned semantic linking. It uses no held-out query answer labels and does not modify model parameters. The experiment compares ordinary trie traversal against the explicit bridge. It measures answer accuracy, target reachability, memory-path visibility, bridge counts, and unlinked entities separately.
+
+Do not treat this linker as part of the core architecture yet. Its purpose is to isolate whether context-specific trie paths need an explicit shared-entity connection mechanism. A positive result would motivate learning or generalizing the bridge operation; it would not prove general semantic reasoning. Canonical `agi.py` and `persistent_dansn_rnn.py` remain unchanged.
