@@ -360,16 +360,27 @@ def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
             target_value_ranks.append(
                 float(1 + (value_logits > value_logits[target_position]).sum().item())
             )
-            pointer_distribution = trace["persistent_token_distribution"]
-            pointer_mix_query.append(
-                float(trace["effective_pointer_mix"].detach().cpu())
-            )
-            pointer_candidate_count_query.append(
-                float(torch.count_nonzero(pointer_distribution).item())
-            )
-            pointer_target_probability_query.append(
-                float(pointer_distribution[target].detach().cpu())
-            )
+            pointer_distribution = trace.get("persistent_token_distribution")
+            if pointer_distribution is not None:
+                pointer_mix_query.append(
+                    float(trace.get(
+                        "effective_pointer_mix",
+                        logits.new_zeros(())
+                    ).detach().cpu())
+                )
+                pointer_candidate_count_query.append(
+                    float(torch.count_nonzero(pointer_distribution).item())
+                )
+                pointer_target_probability_query.append(
+                    float(pointer_distribution[target].detach().cpu())
+                )
+            else:
+                # Readout-fusion and earlier three-path baselines have no
+                # explicit token-pointer channel; report zero rather than
+                # treating that as a failed model evaluation.
+                pointer_mix_query.append(0.0)
+                pointer_candidate_count_query.append(0.0)
+                pointer_target_probability_query.append(0.0)
 
             # Reset only the temporary controller state while keeping DANSN
             # graph topology and persistent vectors available for this query.
