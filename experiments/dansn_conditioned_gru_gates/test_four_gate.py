@@ -435,6 +435,9 @@ def test_four_gate_reads_direct_persistent_child_vector_into_recurrent_state():
 def test_memory_injection_gate_starts_open_while_write_gate_starts_conservative():
     torch.manual_seed(67)
     cell = DANSNFourGateCell(hidden_size=16)
+    with torch.no_grad():
+        cell.controller.weight.zero_()
+        cell.controller.bias.zero_()
     x = torch.zeros(16)
     h = torch.zeros(16)
     memory = torch.ones(16)
