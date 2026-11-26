@@ -136,26 +136,39 @@ def test_write_gate_is_applied_after_target_scoring_and_controls_write_strength(
     assert model.node_memory_quality[path] > 0.0
 
 
-def test_loss_backpropagates_through_all_pre_target_gates():
+def test_loss_backpropagates_through_all_four_gate_paths():
     torch.manual_seed(31)
     brain, ids = make_brain_and_stream()
     model = make_model(brain)
 
-    _, first_state, _ = model.forward_step(ids[0], [ids[0]])
+    # Step one produces a write gate before ids[1] is revealed.
+    _, first_state, first_trace = model.forward_step(ids[0], [ids[0]])
+    assert torch.isfinite(first_trace["persistent_write_gate"]).all()
     model.observe_target([ids[0]], ids[1], first_state)
-    logits, state, trace = model.forward_step(ids[1], ids[:2], first_state)
+
+    # The following prediction retrieves the written vector, so its loss can
+    # backpropagate through the earlier persistent-write gate as well.
+    logits, _state, trace = model.forward_step(
+        ids[1], ids[:2], first_state
+    )
     target = torch.tensor([ids[2]], dtype=torch.long)
     loss = F.cross_entropy(logits.unsqueeze(0), target)
     loss.backward()
 
-    assert torch.isfinite(trace["update_gate"]).all()
-    assert torch.isfinite(trace["reset_gate"]).all()
-    assert torch.isfinite(trace["memory_injection_gate"]).all()
-    assert torch.isfinite(trace["persistent_write_gate"]).all()
+    for name in (
+        "update_gate",
+        "reset_gate",
+        "memory_injection_gate",
+        "persistent_write_gate",
+    ):
+        assert torch.isfinite(trace[name]).all()
+
     grad = model.four_gate_cell.controller.weight.grad
     assert grad is not None
     assert torch.isfinite(grad).all()
     assert torch.linalg.vector_norm(grad).item() > 0
+    write_grad = grad[3 * model.hidden_size:4 * model.hidden_size]
+    assert torch.linalg.vector_norm(write_grad).item() > 0
 
 
 def test_training_updates_parameters_and_uses_four_gate_state_detach():
