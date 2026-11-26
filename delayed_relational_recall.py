@@ -491,9 +491,14 @@ def run_multi_seed(
     for delay in delays:
         summary[delay] = {}
         for metric in metric_keys:
+            sample = runs[0]["results"][delay][metric]
+            keys = ["accuracy", "mean_nll", "mean_reciprocal_rank"]
+            for optional in ("target_reachable_fraction", "target_memory_visible_fraction"):
+                if optional in sample:
+                    keys.append(optional)
             summary[delay][metric] = {
                 key: summarize([run["results"][delay][metric][key] for run in runs])
-                for key in ("accuracy", "mean_nll", "mean_reciprocal_rank")
+                for key in keys
             }
     return {
         "seeds": list(seeds),
