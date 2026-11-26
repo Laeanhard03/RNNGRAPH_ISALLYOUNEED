@@ -345,3 +345,88 @@ def test_retrieval_backs_off_from_new_terminal_query_prefix_after_distractors():
     )
     assert trace["matched_path"] == association_prefix
     assert expected_path in trace["active_paths"]
+
+
+def test_memory_gate_injects_persistent_memory_even_when_update_gate_is_closed():
+    torch.manual_seed(53)
+    cell = DANSNFourGateCell(hidden_size=8)
+    with torch.no_grad():
+        cell.controller.weight.zero_()
+        cell.controller.bias.zero_()
+        # update≈0, reset≈0, memory≈1, write≈0
+        cell.controller.bias[:8].fill_(-20.0)
+        cell.controller.bias[8:16].fill_(-20.0)
+        cell.controller.bias[16:24].fill_(20.0)
+        cell.controller.bias[24:32].fill_(-20.0)
+        cell.candidate_input.weight.zero_()
+        cell.candidate_input.bias.zero_()
+        cell.candidate_hidden.weight.zero_()
+        cell.memory_projection.weight.copy_(torch.eye(8))
+
+    inputs = torch.zeros(8)
+    previous_hidden = torch.ones(8)
+    persistent_memory = torch.linspace(-0.8, 0.8, 8)
+    evidence = torch.tensor([1.0, 0.2, 0.5, 1.0, 1.0])
+
+    hidden, gates = cell(
+        inputs,
+        previous_hidden,
+        persistent_memory,
+        evidence,
+        memory_available=True,
+    )
+    expected = torch.tanh(persistent_memory)
+
+    assert gates["update_gate"].max().item() < 1e-6
+    assert gates["memory_injection_gate"].min().item() > 0.999
+    assert gates["effective_memory_mix"].min().item() > 0.999
+    assert torch.allclose(hidden, expected, atol=1e-5)
+
+
+def test_reset_gate_can_clear_hidden_carry_not_just_candidate_input():
+    torch.manual_seed(59)
+    cell = DANSNFourGateCell(hidden_size=8)
+    with torch.no_grad():
+        cell.controller.weight.zero_()
+        cell.controller.bias.zero_()
+        cell.controller.bias[:8].fill_(-20.0)       # update≈0
+        cell.controller.bias[8:16].fill_(-20.0)    # reset≈0
+        cell.controller.bias[16:24].fill_(-20.0)   # memory≈0
+        cell.controller.bias[24:32].fill_(-20.0)   # write≈0
+        cell.candidate_input.weight.zero_()
+        cell.candidate_input.bias.zero_()
+        cell.candidate_hidden.weight.zero_()
+        cell.memory_projection.weight.zero_()
+
+    hidden, gates = cell(
+        torch.zeros(8),
+        torch.ones(8),
+        torch.zeros(8),
+        torch.zeros(5),
+        memory_available=False,
+    )
+    assert gates["reset_gate"].max().item() < 1e-6
+    assert torch.max(torch.abs(hidden)).item() < 1e-5
+
+
+def test_four_gate_reads_direct_persistent_child_vector_into_recurrent_state():
+    torch.manual_seed(61)
+    brain = Brain()
+    ctx, key, value = brain.vocab.tokenize("recallctx keyalpha valueomega")
+    model = make_model(brain)
+    _, state, _ = model.forward_step(key, [ctx, key])
+    state.write_gate = torch.ones_like(state.write_gate)
+    model.observe_target([ctx, key], value, state)
+
+    logits, next_state, trace = model.forward_step(
+        key, [ctx, key], model.initial_state()
+    )
+    expected_path = (ctx, key, value)
+
+    assert torch.isfinite(logits).all()
+    assert expected_path in trace["persistent_memory_paths"]
+    assert torch.linalg.vector_norm(
+        trace["persistent_memory_readout"]
+    ).item() > 0.0
+    assert trace["effective_memory_mix"].max().item() > 0.0
+    assert torch.isfinite(next_state.hidden).all()
