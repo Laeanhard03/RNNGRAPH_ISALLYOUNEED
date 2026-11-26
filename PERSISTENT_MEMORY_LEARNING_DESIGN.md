@@ -319,3 +319,12 @@ Here `r_t` is the differentiable DANSN graph-read vector returned by the query s
 The implementation is in `memory_read_supervision.py`. Its experiment contrasts read-only DANSN-GRU, persistent next-token-only training, and persistent training with the auxiliary read objective. A matched-weight read-only ablation evaluates the same learned answer head on graph topology without persistent vectors. Test-time fact ingestion is online with neural weights frozen; query scoring does not write answers.
 
 The auxiliary read head is a research probe, not yet a change to the main architecture. Promote it into the persistent adapter only if multi-seed held-out results show a reliable gain over the next-token-only and matched read-only baselines. The canonical `agi.py` remains unchanged.
+
+
+## Memory-read supervision pilot result — 2026-11-27
+
+The auxiliary read-head experiment is implemented in `memory_read_supervision.py` and documented in [MEMORY_READ_SUPERVISION_PILOT_RESULTS.md](MEMORY_READ_SUPERVISION_PILOT_RESULTS.md). GitHub Actions [45865069032](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45865069032) passed the complete test and benchmark workflow, including the corrected tie-aware rank calculation.
+
+Across three seeds and 18 held-out queries, the persistent memory-read answer head reached 2/18 correct when recurrent state was reset (11.11% ± 7.86 pp) and 1/18 when state was preserved (5.56% ± 7.86 pp). The matched-weight topology-only ablation was uniform: 0% accuracy, NLL 3.178, tie-aware MRR 0.08. The persistent head's MRR was higher (0.195 reset; 0.147–0.199 continuous), but its NLL remained worse than uniform (3.694–4.155), showing that its ranking signal is not reliably calibrated. The main next-token output head reached only 1/18 correct in reset mode and none with state preserved; NLL/MRR gains in continuous mode did not yield top-1 answers.
+
+Conclusion: the explicit objective helped the graph-read vector rank the correct answer occasionally, but did not establish reliable relational recall. Keep it experimental; do not merge it into the persistent-memory core. Next, increase independent knowledge-base/query counts, test relation edges separated by interleaved facts, and inspect target-path attention. Canonical `agi.py` and `persistent_dansn_rnn.py` remain unchanged.
