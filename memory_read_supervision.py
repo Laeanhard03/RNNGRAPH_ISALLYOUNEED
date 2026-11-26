@@ -316,6 +316,15 @@ def run_memory_supervision(
         supervised_model.load_state_dict(supervised_weights)
         ingest_context_online(supervised_model, test_prefix)
 
+        # Ablate persistent vectors while keeping the exact same learned
+        # neural weights and answer head. This isolates the value of stored
+        # path memory from graph topology plus learned embeddings alone.
+        readhead_brain, readhead_readonly = _new_hybrid(
+            vocab, vocab_size, hidden_size, window_size, graph_depth
+        )
+        readhead_brain.engine.read_book(test_prefix, window_size)
+        readhead_readonly.load_state_dict(supervised_weights)
+
         delay_result = {
             "read_only_next_token_reset": evaluate_hybrid_queries(
                 ro_model, test_prefix, test_queries, True
@@ -336,11 +345,11 @@ def run_memory_supervision(
                 supervised_model, test_prefix, test_queries, False
             ),
             "memory_read_head_readonly_reset": evaluate_memory_answer_head(
-                ro_model, answer_head, test_prefix, test_queries,
+                readhead_readonly, answer_head, test_prefix, test_queries,
                 candidate_ids, target_to_class, True
             ),
             "memory_read_head_readonly_continuous": evaluate_memory_answer_head(
-                ro_model, answer_head, test_prefix, test_queries,
+                readhead_readonly, answer_head, test_prefix, test_queries,
                 candidate_ids, target_to_class, False
             ),
             "memory_read_head_persistent_reset": evaluate_memory_answer_head(
