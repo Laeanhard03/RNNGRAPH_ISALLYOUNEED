@@ -1,14 +1,12 @@
 # RNNGRAPH_ISALLYOUNEED
 
-Research code for the **Deep Attention Neuron-Synapse Network** and an optional
-RNN-controlled recurrent graph-state block.
+Research code for the **Deep Attention Neuron-Synapse Network (DANSN)** and separate recurrent-memory experiments.
 
 ## Canonical graph engine
 
-The original graph engine remains in `agi.py`. It is a token-sequence graph
-generator with trie-like synapse paths, longest-suffix context backoff,
-fuzzy continuation overlap, BFS multi-hop attention, and autoregressive
-candidate sampling. It is not a Transformer or a pretrained language model.
+The original graph engine remains in `agi.py`. It is a token-sequence graph generator with trie-like synapse paths, longest-suffix context backoff, fuzzy continuation overlap, BFS multi-hop attention, and autoregressive candidate sampling.
+
+**The canonical `agi.py` engine is not modified by the experiments below.**
 
 Original project scripts:
 - `agi.py` — canonical graph engine and `Brain` wrapper.
@@ -20,51 +18,56 @@ Original project scripts:
 - `feedback_experiment.py` — feedback evaluation harness.
 - `test_agi.py` — original engine regression tests.
 
-## Optional recurrent graph-state block
+## Earlier recurrent graph prototype
 
-`recurrent_graph.py` introduces a separate PyTorch module that combines:
-- a GRU controller for temporal sequence state;
-- shared token embeddings;
-- sparse temporary state vectors for context-specific graph neurons;
-- gated message passing along synapse edges in a retrieved local subgraph;
-- query-weighted graph readout and a gated residual into the controller state.
+`recurrent_graph.py` contains an optional GRU controller with temporary sparse graph-node states and gated message passing. It snapshots graph topology and is not a continual learner.
 
-It uses the canonical engine's suffix lookup to choose an active neighborhood.
-The graph topology is a snapshot: call `model.refresh_graph(engine)` after
-changing the underlying graph.
+## Persistent DANSN-RNN experiment
 
-This is a research prototype, not a trained language model. It does not yet
-include a complete training loop, batching, optimizer, dataset pipeline,
-benchmark comparison, or end-to-end gradient learning of discrete graph
-retrieval. Train it on a task before interpreting its logits as useful output.
+`persistent_dansn_rnn.py` is a separate experiment implementing a more tightly coupled recurrent loop:
+
+1. The current token and previous GRU state query a bounded DANSN context neighborhood.
+2. DANSN persistent context-path vectors are read using differentiable attention and graph-structure evidence.
+3. The graph readout is fused into the GRU update and next-token prediction.
+4. The target is scored **before** it is revealed to graph memory.
+5. After target reveal, DANSN extends/reinforces the observed context-to-target path and writes a gated state vector to the post-target context path.
+6. `train_stream` backpropagates next-token loss through short chunks using truncated BPTT; graph topology and memory writes happen every token.
+7. `evaluate_prequential` records pre-update losses before adapting graph/memory. It does not change neural parameters.
+
+### Important implementation details
+
+- Persistent neuron memory is stored in a sparse dictionary keyed by stable token-path tuples, not Python object IDs.
+- The path index is updated incrementally as graph paths are observed, so new nodes are retrievable without rebuilding the whole index.
+- Only the post-target context node receives the initial write; memory is not broadcast to unrelated nodes.
+- The first version uses a fixed vocabulary. Build the vocabulary before constructing the model or map unseen tokens to an UNK ID.
+- Save the DANSN graph and vocabulary separately with `Brain.save()`; save neural parameters and sparse node memory with `model.save_checkpoint()`. Restore the matching graph/vocabulary before loading the model checkpoint.
+- Model memory is sparse and bounded by a simple FIFO cap. More advanced relevance-based eviction, provenance, contradiction handling, and dynamic vocabulary are future work.
+- Discrete graph-edge creation is a non-differentiable memory operation. Backpropagation trains the recurrent controller and differentiable query/readout/write modules; graph edges are created after observations.
+- This is a research prototype, not evidence of better language modeling. Lower prequential perplexity is a hypothesis to test, not a guarantee.
 
 ### Install and test
-
-The original engine uses the Python standard library. The recurrent module
-requires PyTorch:
 
 ```bash
 pip install -r requirements-recurrent.txt
 python test_agi.py
 python test_recurrent_graph.py
+python test_persistent_dansn_rnn.py
 ```
 
-The recurrent tests check tensor shapes, finite outputs, gradients through
-controller and graph-update parameters, state carry-over between chunks, and
-empty-sequence handling. They are unit tests, not evidence of task-level
-reasoning or performance gains.
+The persistent experiment tests causal predict-before-write behavior, immediate graph growth, persistent memory retrieval, online parameter updates, prequential evaluation without weight updates, and graph/memory checkpoint round-tripping.
 
-## Research direction
+## Evaluation plan
 
-The chosen direction is an **RNN-controlled recurrent graph-state network**:
-the RNN handles temporal control while graph neurons maintain sequence-local
-states and exchange gated messages through persistent synaptic structure.
-Keep the original `agi.py` engine as the baseline. Validate against a plain
-GRU and established gated graph-recurrent baselines before integrating this
-prototype into the canonical engine.
+Compare on the same chronological stream:
+1. Plain GRU.
+2. Original DANSN.
+3. GRU with read-only DANSN retrieval.
+4. GRU with persistent writable DANSN context memory.
+
+Measure prequential next-token NLL/perplexity, delayed and multi-hop recall, retention, distractor sensitivity, graph/memory size, and retrieval latency. Keep target leakage out of every evaluation.
 
 ## Current status
 
-- Original engine regression suite: 14/14 passed in the development session.
-- Recurrent graph-state unit tests: 4/4 passed in the development session.
-- No task-level benchmark or superiority claim has been established.
+- Original DANSN test suite: 14/14 passed in the earlier development session.
+- Earlier recurrent prototype: 4/4 unit tests passed in the earlier development session.
+- Persistent DANSN-RNN prototype: initial adapter tests are included; task-level benchmarks and superiority claims remain unestablished.
