@@ -39,7 +39,7 @@ def test_online_context_ingestion_grows_graph_and_persistent_memory_without_weig
     brain = Brain(vocab=copy.deepcopy(data["vocab"]))
     model = _make_hybrid(
         brain.engine, len(data["vocab"].word_to_id) + 1,
-        hidden_size=16, window_size=10, graph_depth=8,
+        hidden_size=16, window_size=8, graph_depth=8,
     )
     before_parameters = [parameter.detach().clone() for parameter in model.parameters()]
     before = model.graph_stats()
@@ -62,7 +62,7 @@ def test_subject_prefix_can_reach_the_two_hop_location_in_graph():
     brain = Brain(vocab=copy.deepcopy(data["vocab"]))
     model = _make_hybrid(
         brain.engine, len(data["vocab"].word_to_id) + 1,
-        hidden_size=16, window_size=10, graph_depth=8,
+        hidden_size=16, window_size=8, graph_depth=8,
     )
     ingest_context_online(model, data["test_fact_ids"])
 
@@ -78,7 +78,7 @@ def test_query_evaluation_scores_without_mutating_graph_or_persistent_vectors():
     brain = Brain(vocab=copy.deepcopy(data["vocab"]))
     model = _make_hybrid(
         brain.engine, len(data["vocab"].word_to_id) + 1,
-        hidden_size=16, window_size=10, graph_depth=8,
+        hidden_size=16, window_size=8, graph_depth=8,
     )
     ingest_context_online(model, data["test_fact_ids"])
     before_nodes = model.graph_stats()["nodes"]
