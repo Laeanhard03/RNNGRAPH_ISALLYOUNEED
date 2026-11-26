@@ -153,9 +153,24 @@ This is a key change: DANSN memory is now an independent source of recurrent-sta
 
 The direct persistent read is separate from the broad transient graph-neighborhood readout. It first attends to stored vectors on immediate outgoing continuations of the matched context; if none exist, it falls back to other memory-bearing active paths. Each stored vector is keyed using the child-node embedding plus the vector itself and receives learned query attention with graph-frequency and memory-quality priors. The ordinary graph readout remains available to the output head and write path.
 
-Ablations remain parameter-shape matched: no memory injection sets the fusion gate to zero; no persistent write prevents storage; no graph evidence zeros structural controller features while actual memory availability remains separately detected. Checkpoint marker is now `dansn_four_gate_gru_v2` because the state-transition semantics changed.
+Ablations remain parameter-shape matched: no memory injection sets the fusion gate to zero; no persistent write prevents storage; no graph evidence zeros structural controller features while actual memory availability remains separately detected. Checkpoint marker is now `dansn_four_gate_gru_v3` because the state-transition semantics changed.
 
 
 ## Memory-gate initialization
 
 The first direct state-fusion run measured mean effective memory mix of 0.084; the model learned to keep the memory gate nearly closed, and full DG-GRU only modestly improved NLL over its no-memory-injection ablation. The memory gate's initial bias is therefore now 0.0 (initial sigmoid near 0.5) so retrieved persistent vectors can contribute from early training. The persistent-write gate remains initialized at -2.0 to keep writes conservative until learned. This is an initialization hypothesis being tested, not a guaranteed performance improvement.
+
+
+## Joint recurrent–associative decoder channel
+
+The initial open-memory run raised the mean effective memory mix to 0.356 and improved full-model NLL, but value-only top-1 remained 19.4%. The recurrent state was using DANSN, yet the output head still received only `[hidden ; broad_graph_readout]`. To avoid making the prediction decoder reconstruct all persistent-association detail from the fused hidden state, the v3 model adds a gated skip channel:
+
+\[
+q_t^{mem}=\alpha_t\odot ReadDANSN_t^{persistent}
+\]
+
+\[
+logits_t=W_o[\,h_t\;;\;g_t^{broad}\;;\;q_t^{mem}\,]+b_o
+\]
+
+The same effective memory mix (\alpha_t) now controls both (a) DANSN's contribution to recurrent hidden state and (b) the separate associative-memory channel seen by the output decoder. This makes the decoder jointly observe recurrent state, transient graph context, and persistent associative memory. The no-memory-injection ablation sets both the hidden fusion and decoder skip to zero. Checkpoint marker is now `dansn_four_gate_gru_v3`.
