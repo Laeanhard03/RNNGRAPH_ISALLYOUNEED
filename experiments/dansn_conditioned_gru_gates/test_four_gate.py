@@ -430,3 +430,16 @@ def test_four_gate_reads_direct_persistent_child_vector_into_recurrent_state():
     ).item() > 0.0
     assert trace["effective_memory_mix"].max().item() > 0.0
     assert torch.isfinite(next_state.hidden).all()
+
+
+def test_memory_injection_gate_starts_open_while_write_gate_starts_conservative():
+    torch.manual_seed(67)
+    cell = DANSNFourGateCell(hidden_size=16)
+    x = torch.zeros(16)
+    h = torch.zeros(16)
+    memory = torch.ones(16)
+    evidence = torch.tensor([1.0, 0.2, 0.5, 1.0, 1.0])
+    _, gates = cell(x, h, memory, evidence, memory_available=True)
+
+    assert 0.35 < float(gates["memory_injection_gate"].mean()) < 0.65
+    assert float(gates["persistent_write_gate"].mean()) < 0.2
