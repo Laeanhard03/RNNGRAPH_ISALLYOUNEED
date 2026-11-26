@@ -155,3 +155,15 @@ All use the same synthetic chronological stream and training/evaluation protocol
 For each gate ablation, gate_diagnostics reports reset/update activation mean, standard deviation, fractions below 0.05 and above 0.95, and mean graph-readout norm. These diagnostics are collected in a separate frozen pass on a model copy so they do not alter adaptive evaluation state.
 
 This is a small synthetic ablation pilot. The gate-conditioned variants are parameter-matched with each other, but the plain GRU and readout-fusion baseline have different parameter counts. Interpret static and adaptive metrics separately.
+
+
+## One-shot associative recall mechanism test
+
+The dedicated synthetic benchmark `associative_recall.py` checks whether the coupled recurrent/graph system can store a newly revealed key/value sequence and recall it after distractors. Training uses stable associations for one key set; held-out keys appear during training only in unrelated noise contexts. During evaluation, new held-out key/value pairs are revealed once, followed by a distractor delay and shuffled recall queries. The recurrent state resets at test start while the trained DANSN graph and persistent memory are retained. Each query is scored before its target is revealed.
+
+Run:
+
+    python -m pytest -q experiments/dansn_conditioned_gru_gates/
+    python -m experiments.dansn_conditioned_gru_gates.associative_recall --seeds 7,13,21 --epochs 2
+
+Compared systems: plain GRU, readout-fusion DANSN-RNN, three-path gate-conditioned GRU, full four-gate DG-GRU, and the three four-gate ablations. Report both neural query accuracy/NLL and graph path/vector-memory coverage. High graph coverage with low neural accuracy means storage/retrieval succeeds but the learned readout does not yet decode it. This is a synthetic path-association mechanism test, not a real-language or abstract semantic-reasoning benchmark.
