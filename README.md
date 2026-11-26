@@ -41,7 +41,7 @@ Original project scripts:
 - Only the post-target context node receives the initial write; memory is not broadcast to unrelated nodes.
 - The first version uses a fixed vocabulary. Build the vocabulary before constructing the model or map unseen tokens to an UNK ID.
 - Save the DANSN graph and vocabulary separately with `Brain.save()`; save neural parameters and sparse node memory with `model.save_checkpoint()`. Restore the matching graph/vocabulary before loading the model checkpoint.
-- Model memory is sparse and bounded by a simple FIFO cap. Smarter relevance-based eviction, provenance, contradiction handling, and dynamic vocabulary are future work.
+- Model memory is sparse and bounded by an LRU cap with quality/write-count tie-breakers. Provenance, contradiction handling, learned utility-based eviction, and dynamic vocabulary are future work.
 - Discrete graph-edge creation is a non-differentiable memory operation. Backpropagation trains the recurrent controller and differentiable query/readout/write modules; graph edges are created after observations.
 - This is a research prototype, not evidence of better language modeling. Lower prequential perplexity is a hypothesis to test, not a guarantee.
 
@@ -51,7 +51,7 @@ Original project scripts:
 pip install -r requirements-recurrent.txt
 python train_persistent_demo.py
 python test_persistent_dansn_rnn.py
-python benchmark_continual_learning.py --epochs 3
+python benchmark_continual_learning.py --epochs 3 --seeds 7,13,21
 ```
 
 The demo uses a small synthetic corpus and is only a smoke test. It is not a benchmark. The test suite checks causal predict-before-write behavior, immediate graph growth, persistent memory retrieval, online parameter updates, prequential evaluation without weight updates, checkpoint round-tripping, and unknown-context fallback.
@@ -96,4 +96,4 @@ Measure prequential next-token NLL/perplexity, delayed and multi-hop recall, ret
 
 The persistent adapter stores per-context memory quality and access metadata. Low-confidence writes are blended less strongly, quality provides a small retrieval prior, and capacity eviction removes the least-recently-used entry (ties favor lower-quality/less-used memories). A zero-confidence write leaves the existing vector unchanged. Checkpoint format v2 stores these metadata fields and still loads v1 checkpoints with default quality values.
 
-Run `python benchmark_continual_learning.py --epochs 3` to compare a plain GRU, original DANSN, a read-only DANSN-GRU, and the writable persistent DANSN-RNN on a small synthetic chronological stream. The harness reports both static held-out NLL/perplexity and prequential adaptive NLL/perplexity for all four systems, plus graph candidate coverage. Static metrics are compared only with static metrics; adaptive metrics compare each system after score-before-update online adaptation. It is a smoke/research comparison, not a benchmark claim; use multiple seeds and larger held-out data before drawing conclusions. The first one-seed pilot is recorded in [BENCHMARK_PILOT_RESULTS.md](BENCHMARK_PILOT_RESULTS.md) with its limitations and next validation requirements.
+Run `python benchmark_continual_learning.py --epochs 3 --seeds 7,13,21` to compare a plain GRU, original DANSN, a read-only DANSN-GRU, and the writable persistent DANSN-RNN on a small synthetic chronological stream. The harness reports both static held-out NLL/perplexity and prequential adaptive NLL/perplexity for all four systems, plus graph candidate coverage. Multi-seed mode summarizes mean and population standard deviation across independent seeds. Static scoring runs on a copy so it cannot mutate memory-access metadata used by the subsequent adaptive run. Static metrics are compared only with static metrics; adaptive metrics compare each system after score-before-update online adaptation. It is a smoke/research comparison, not a benchmark claim; use multiple seeds and larger held-out data before drawing conclusions. The first one-seed pilot is recorded in [BENCHMARK_PILOT_RESULTS.md](BENCHMARK_PILOT_RESULTS.md) with its limitations and next validation requirements.
