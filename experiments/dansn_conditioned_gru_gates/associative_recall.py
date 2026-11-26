@@ -453,7 +453,7 @@ def run_one_seed(
     hidden_size: int = 32,
     chunk_size: int = 64,
     window_size: int = 4,
-    train_keys: int = 12,
+    train_keys: int = 16,
     heldout_keys: int = 12,
     value_count: int = 16,
     train_episodes: int = 8,
