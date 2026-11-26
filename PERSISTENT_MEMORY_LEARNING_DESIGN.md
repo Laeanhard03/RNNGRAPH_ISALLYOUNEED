@@ -249,9 +249,11 @@ Compare static metrics only against static metrics, and adaptive metrics only ag
 
 ## 11. Remaining implementation limits and verification
 
-- Eight adapter tests now cover causal predict-before-write, immediate graph/memory growth, online parameter updates, zero-confidence write safety, LRU eviction, checkpoint quality metadata, v1 checkpoint migration, and unknown-context fallback.
-- A GitHub Actions workflow runs canonical DANSN tests, the earlier recurrent adapter tests, persistent-memory tests, and a comparison-harness smoke test against the actual repository `agi.py`. The first CI run failed before tests due to an unsupported pip-cache configuration; that was removed and clean reruns were triggered. Results are pending at the time this document was updated.
-- The prototype still uses a fixed vocabulary, one post-target context write, a FIFO-independent LRU heuristic rather than learned utility-based eviction, and a single-stream training API.
+- Eight adapter tests cover causal predict-before-write, immediate graph/memory growth, online parameter updates, zero-confidence write safety, LRU eviction, checkpoint quality metadata, v1 checkpoint migration, and unknown-context fallback.
+- GitHub Actions run [45857528186](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45857528186) completed successfully against the actual repository `agi.py`: compilation, 14/14 canonical DANSN tests, 4/4 earlier recurrent tests, 8/8 persistent-memory tests, three-seed benchmark smoke test, and result artifact upload all passed.
+- The three-seed synthetic pilot (seeds 7, 13, 21) reported static held-out PPL means: GRU 16.333 ± 0.711; DANSN-only 528.270 ± 0.000; read-only DANSN-GRU 14.269 ± 1.054; persistent DANSN-RNN 14.946 ± 0.611. Adaptive prequential PPL means: GRU 15.829 ± 0.701; DANSN-only 566.323 ± 0.000; read-only DANSN-GRU 13.611 ± 0.967; persistent DANSN-RNN 11.084 ± 0.533. The writable hybrid led the adaptive metric but did not lead static held-out performance.
+- These remain smoke results from one tiny repetitive synthetic corpus, 29 predictions per seed, one training pass and unmatched parameter counts. Seed variation does not replace evaluation across distinct datasets, delayed recall tasks, longer streams, or matched compute budgets. Do not claim broad superiority.
+- The prototype still uses a fixed vocabulary, one post-target context write, a simple LRU heuristic rather than learned utility-based eviction, and a single-stream training API.
 - Persistent vectors live in a sparse external map keyed by stable graph paths rather than fields added to the original `Neuron` class.
-- Dynamic vocabulary expansion, provenance/contradiction handling, abstract idea/concept merging, batching, and multi-seed larger-scale comparisons remain future work.
+- Dynamic vocabulary expansion, provenance/contradiction handling, abstract idea/concept merging, batching, and larger multi-corpus comparisons remain future work.
 - The canonical `agi.py` file has not been modified. The adapter is an isolated experiment and must remain separate until validated.
