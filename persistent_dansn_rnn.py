@@ -130,13 +130,28 @@ class PersistentDANSNRNN(nn.Module):
                 )
 
     def _longest_context_path(self, history: Sequence[int]) -> Optional[PathKey]:
+        """Choose the longest suffix that can actually continue or be read.
+
+        A just-observed query prefix can create a longer terminal path (for
+        example, [distractor, query_marker, key]) immediately before the model
+        predicts the associated value. Blindly choosing that terminal path
+        shadows a shorter learned association prefix ([query_marker, key]).
+        Prefer the longest existing suffix with outgoing synapses or its own
+        persistent vector; retain the longest terminal suffix only as fallback.
+        """
         max_context = max(self.window_size - 1, 1)
         first = max(0, len(history) - max_context)
+        longest_existing: Optional[PathKey] = None
         for start in range(first, len(history)):
             path = tuple(int(x) for x in history[start:])
-            if path in self._path_nodes:
+            node = self._path_nodes.get(path)
+            if node is None:
+                continue
+            if longest_existing is None:
+                longest_existing = path
+            if node.synapses or path in self.node_memory:
                 return path
-        return None
+        return longest_existing
 
     def _active_subgraph(self, start_path: Optional[PathKey]):
         if start_path is None or start_path not in self._path_nodes:
