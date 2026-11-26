@@ -378,8 +378,11 @@ def run_delayed_recall(
             training_history["readonly_query_loss"].append(
                 train_hybrid_query(readonly, query, readonly_optimizer, write_memory=False)
             )
+            # Query labels train the retrieval/readout weights but are not written
+            # back as a shortcut person->place edge. Memory must be retrieved from
+            # the two-hop facts, not from an answer copied during supervision.
             training_history["writable_query_loss"].append(
-                train_hybrid_query(writable, query, writable_optimizer, write_memory=True)
+                train_hybrid_query(writable, query, writable_optimizer, write_memory=False)
             )
 
     readonly_weights = {key: value.detach().clone() for key, value in readonly.state_dict().items()}
