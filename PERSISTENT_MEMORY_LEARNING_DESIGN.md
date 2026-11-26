@@ -1,6 +1,6 @@
 # DANSN–RNN Persistent Memory: Online Learning Protocol
 
-**Status:** Design proposal v0.1 — documentation only. No implementation or performance claim is made by this document.
+**Status:** Design proposal v0.1 with a first executable experimental adapter committed on 2026-11-26. The code is a prototype; no task-level performance claim is established.
 
 **Experiment repository:** `Laeanhard03/RNNGRAPH_ISALLYOUNEED`  
 **Canonical baseline:** `agi.py` remains unchanged.  
@@ -207,12 +207,30 @@ Report:
 
 Start with a small synthetic controlled corpus and held-out sequences, then move to a real text stream only after the causal evaluation harness is correct.
 
-## 9. Known limitations of the current prototype
+## 9. First implementation status — 2026-11-26
 
-The current `recurrent_graph.py` is not yet this design:
-- its `node_states` live in a sequence state dictionary rather than a durable graph-memory store;
-- graph topology is snapshotted and does not automatically reflect online edge creation;
-- it does not implement causal online training, a task-level optimizer loop, or persistence of node vectors;
-- its existing tests check shapes/gradients/state carry-over, not continual learning or perplexity.
+The separate adapter `persistent_dansn_rnn.py` now implements the first version of this protocol:
 
-Therefore this document defines the next implementation target; it does not describe features already implemented.
+- Stable context-path tuples map persistent vectors to DANSN trie nodes.
+- New online observations extend the graph path index incrementally.
+- The recurrent controller retrieves bounded DANSN neighborhoods through differentiable attention and transient gated message passing.
+- The target is scored before `observe_target` mutates graph topology or persistent memory.
+- After reveal, the adapter increments/creates the observed path and writes one gated vector to the post-target context path.
+- `train_stream` applies truncated BPTT over short chunks while graph and memory writes happen after each target.
+- `evaluate_prequential` scores each target before graph adaptation and leaves neural parameters unchanged.
+- Model weights and path-keyed memory can be checkpointed separately from the Brain graph/vocabulary.
+
+Supporting files:
+- `persistent_dansn_rnn.py`
+- `test_persistent_dansn_rnn.py`
+- `train_persistent_demo.py`
+- Updated `README.md`
+
+## 10. Remaining implementation limits and verification
+
+- The first adapter tests passed locally (5/5) using an engine-compatible test double. The repository test file imports the real `Brain` from canonical `agi.py`, but an execution against that exact file was not completed in this session.
+- A tiny synthetic demo ran against the same test double. Its training-stream perplexity decreased across repeated passes, but this is only a wiring/smoke-test result, not a model-quality result or generalization evidence.
+- The first version uses a fixed vocabulary, simple FIFO memory eviction, one post-target context write, and one sequence stream per training call.
+- Persistent vectors live in a sparse external map keyed by graph path rather than fields added to the original `Neuron` class.
+- Dynamic vocabulary expansion, smarter memory eviction, provenance/contradiction handling, abstract idea/concept merging, batching, and comparative benchmarks remain future work.
+- The canonical `agi.py` file has not been modified. The adapter is an isolated experiment and must remain separate until validated.
