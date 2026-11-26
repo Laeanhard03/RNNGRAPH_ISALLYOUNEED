@@ -1,22 +1,27 @@
 name: DANSN-GRU real-corpus benchmark
 
 on:
+  push:
+    branches:
+      - feature/dansn-gated-gru-real-corpora
+    paths:
+      - ".github/workflows/dansn-gru-real-corpus.yml"
   workflow_dispatch:
     inputs:
       train_tokens:
         description: Maximum training tokens from WikiText-103
         required: true
-        default: "50000"
+        default: "100000"
         type: string
       validation_tokens:
         description: Maximum validation tokens
         required: true
-        default: "10000"
+        default: "20000"
         type: string
       test_tokens:
         description: Maximum test tokens
         required: true
-        default: "10000"
+        default: "20000"
         type: string
       seeds:
         description: Comma-separated random seeds
@@ -50,10 +55,10 @@ jobs:
         run: python -m pytest -q experiments/dansn_conditioned_gru_gates/
       - name: Run WikiText-103 benchmark
         env:
-          TRAIN_TOKENS: ${{ inputs.train_tokens }}
-          VALIDATION_TOKENS: ${{ inputs.validation_tokens }}
-          TEST_TOKENS: ${{ inputs.test_tokens }}
-          SEEDS: ${{ inputs.seeds }}
+          TRAIN_TOKENS: ${{ inputs.train_tokens || '100000' }}
+          VALIDATION_TOKENS: ${{ inputs.validation_tokens || '20000' }}
+          TEST_TOKENS: ${{ inputs.test_tokens || '20000' }}
+          SEEDS: ${{ inputs.seeds || '7' }}
         run: |
           python -m experiments.dansn_conditioned_gru_gates.large_corpus_benchmark \
             --dataset wikitext103 \
