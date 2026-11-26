@@ -172,3 +172,12 @@ Compared systems: plain GRU, readout-fusion DANSN-RNN, three-path gate-condition
 ### Retrieval matcher correction
 
 The first delayed-recall run exposed a terminal-suffix shadowing bug in the shared experimental graph reader. The matcher could prefer a longer, newly created suffix with no continuation over a shorter prefix that contains the learned association. The reader now prefers the longest suffix with outgoing graph continuations; only when none exists does it fall back to a memory-only suffix, then any existing suffix. A regression test reproduces the actual causal sequence. The post-fix synthetic run is the one to use when assessing recall behavior.
+
+
+### First corrected synthetic result — 2026-11-27
+
+GitHub Actions run [45890601026](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45890601026) passed **29 tests** and completed the three-seed delayed-recall benchmark. After the continuation-first suffix matcher fix, graph active-path coverage increased from 0% to **100%** and persistent-vector coverage remained **100%** for all writing-enabled systems. The no-persistent-write ablation had 0% graph/vector coverage as expected.
+
+However, query top-1 accuracy remained **0% for every system**, including the full four-gate model. Mean query NLL: plain GRU 4.233; readout-fusion 4.547; three-path gate GRU 4.207; full four-gate 5.111; no-memory-injection 5.222; no-persistent-write 4.249; no-graph-evidence 5.118. This means graph-path storage and retrieval are now structurally confirmed, but the network's neural output head does not yet decode the retrieved association into the correct value. Do not claim the full architecture works end-to-end or outperforms the simpler baselines.
+
+The next diagnostic run strengthens the task so all 16 possible output-value classes occur in supervised training (16 training keys, 12 held-out keys), then reports value-restricted top-1, probability mass assigned to value tokens, target rank among values, and a second query score with the temporary RNN hidden state reset at each query while DANSN memory is retained. These isolate output decoding from general vocabulary competition and recurrent carry-over.
