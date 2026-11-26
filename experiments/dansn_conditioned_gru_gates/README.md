@@ -186,3 +186,6 @@ The next diagnostic run strengthens the task so all 16 possible output-value cla
 ### Four-gate state coupling
 
 The four-gate cell now has a direct DANSN-to-hidden-state path. The reset gate controls both candidate conditioning and how much prior hidden state survives. The memory gate independently blends an attended persistent DANSN vector with the recurrent proposal, rather than placing memory only inside the candidate activation (where update-gate multiplication weakened it). Direct memory retrieval prioritizes stored vectors on outgoing continuations of the matched context, separate from the broad transient graph readout. The current checkpoint marker is `dansn_four_gate_gru_v2`.
+
+
+The memory-injection gate now starts with bias 0.0 (initial sigmoid near 0.5) rather than -2.0, because the first direct-fusion run learned an effective injection mean of only 0.084. Persistent-write bias remains -2.0 so storage remains conservative. A test guards this initialization. The change is under evaluation; no gain is assumed.
