@@ -238,10 +238,14 @@ The persistent adapter now includes:
 The comparison harness `benchmark_continual_learning.py` evaluates four systems on a small chronological synthetic corpus:
 1. Plain GRU.
 2. Original DANSN-only predictor.
-3. Read-only DANSN-GRU (graph prebuilt from the training stream; no graph or state writes).
+3. Read-only DANSN-GRU (graph prebuilt from the training stream; graph/state writes are disabled).
 4. Writable persistent DANSN-RNN.
 
-It reports test prequential NLL/perplexity and graph candidate coverage. The DANSN-only and writable hybrid variants score a target before updating the graph with it. The harness is a smoke/research comparison, not a benchmark claim; larger datasets and multiple seeds are necessary.
+It now reports two test protocols for each system:
+- **Static held-out:** score the test stream without test-time graph or parameter updates.
+- **Adaptive prequential:** score each target first, then apply that system's online update (GRU optimizer update, DANSN graph update, read-only-hybrid GRU update with fixed graph, or writable-hybrid GRU plus graph/memory update).
+
+Compare static metrics only against static metrics, and adaptive metrics only against adaptive metrics. The DANSN-only and writable hybrid variants score a target before updating the graph with it. The harness remains a small synthetic smoke/research comparison, not a benchmark claim; larger chronological corpora and multiple seeds are necessary.
 
 ## 11. Remaining implementation limits and verification
 
