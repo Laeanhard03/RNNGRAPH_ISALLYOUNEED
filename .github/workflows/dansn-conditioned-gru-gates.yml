@@ -48,6 +48,7 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
           data = json.loads(Path("benchmark-results/dansn_conditioned_gru_comparison.json").read_text())
           systems = [
@@ -79,7 +80,7 @@ jobs:
               "Exploratory synthetic pilot only; not evidence of general superiority.",
               "See the uploaded JSON artifact for per-seed metrics and graph-memory statistics.",
           ]
-          with open("$GITHUB_STEP_SUMMARY", "a", encoding="utf-8") as handle:
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
               handle.write("\\n".join(lines) + "\\n")
           PY
       - name: Upload benchmark results
