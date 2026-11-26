@@ -7,6 +7,9 @@ on:
       - feature/dg-gru-four-gate-control
     paths:
       - ".github/workflows/dansn-gru-real-corpus.yml"
+      - "experiments/dansn_conditioned_gru_gates/four_gate.py"
+      - "experiments/dansn_conditioned_gru_gates/large_corpus_benchmark.py"
+      - "experiments/dansn_conditioned_gru_gates/corpus.py"
   workflow_dispatch:
     inputs:
       train_tokens:
