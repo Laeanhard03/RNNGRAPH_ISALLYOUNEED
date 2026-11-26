@@ -151,3 +151,58 @@ if __name__ == "__main__":
     raise SystemExit(
         "Run with: python -m pytest experiments/dansn_conditioned_gru_gates/test_model.py"
     )
+
+
+def test_context_ablation_routes_graph_context_to_only_selected_gate_paths():
+    torch.manual_seed(37)
+    inputs = torch.randn(8)
+    hidden = torch.randn(8)
+    no_context = torch.zeros(8)
+    graph_context = torch.randn(8)
+
+    reset_cell = DANSNConditionedGRUCell(
+        input_size=8, hidden_size=8, conditioning_mode="reset_only"
+    )
+    _, reset_without = reset_cell(inputs, hidden, no_context)
+    _, reset_with = reset_cell(inputs, hidden, graph_context)
+    assert not torch.allclose(
+        reset_without["reset_gate"], reset_with["reset_gate"]
+    )
+    assert torch.equal(
+        reset_without["update_gate"], reset_with["update_gate"]
+    )
+
+    update_cell = DANSNConditionedGRUCell(
+        input_size=8, hidden_size=8, conditioning_mode="update_only"
+    )
+    _, update_without = update_cell(inputs, hidden, no_context)
+    _, update_with = update_cell(inputs, hidden, graph_context)
+    assert not torch.allclose(
+        update_without["update_gate"], update_with["update_gate"]
+    )
+    assert torch.equal(
+        update_without["reset_gate"], update_with["reset_gate"]
+    )
+    # With reset unchanged and no direct candidate context, candidate is equal.
+    assert torch.equal(update_without["candidate"], update_with["candidate"])
+
+
+def test_gate_ablation_mode_is_saved_and_must_match_on_restore():
+    import pytest
+
+    brain, ids = make_brain_and_stream()
+    reset_model = make_model(brain, gate_ablation="reset_only")
+    _, state, _ = reset_model.forward_step(ids[0], [ids[0]])
+    reset_model.observe_target([ids[0]], ids[1], state)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        checkpoint = Path(tmp) / "reset_only.pt"
+        reset_model.save_checkpoint(checkpoint)
+
+        same_mode = make_model(brain, gate_ablation="reset_only")
+        same_mode.load_checkpoint(checkpoint)
+        assert same_mode.gate_ablation == "reset_only"
+
+        wrong_mode = make_model(brain, gate_ablation="update_only")
+        with pytest.raises(ValueError, match="gate_ablation"):
+            wrong_mode.load_checkpoint(checkpoint)
