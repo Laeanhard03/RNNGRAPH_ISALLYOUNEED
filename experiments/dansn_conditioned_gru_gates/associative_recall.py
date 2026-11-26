@@ -290,6 +290,9 @@ def _evaluate_plain(model: PlainGRU, dataset: RecallDataset) -> dict:
         "mean_effective_memory_mix_at_query": None,
         "mean_persistent_memory_readout_norm_at_query": None,
         "mean_memory_output_context_norm_at_query": None,
+        "mean_pointer_mix_at_query": None,
+        "mean_pointer_candidate_count_at_query": None,
+        "mean_pointer_target_probability_at_query": None,
         "mean_update_gate_at_query": None,
         "mean_reset_gate_at_query": None,
         "mean_query_delay_tokens": dataset.metadata["mean_query_delay_tokens"],
@@ -313,6 +316,9 @@ def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
     effective_memory_mix_query: list[float] = []
     persistent_memory_norm_query: list[float] = []
     memory_output_norm_query: list[float] = []
+    pointer_mix_query: list[float] = []
+    pointer_candidate_count_query: list[float] = []
+    pointer_target_probability_query: list[float] = []
     update_gate_query: list[float] = []
     reset_gate_query: list[float] = []
     value_only_correct = 0
@@ -353,6 +359,16 @@ def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
             )
             target_value_ranks.append(
                 float(1 + (value_logits > value_logits[target_position]).sum().item())
+            )
+            pointer_distribution = trace["persistent_token_distribution"]
+            pointer_mix_query.append(
+                float(trace["effective_pointer_mix"].detach().cpu())
+            )
+            pointer_candidate_count_query.append(
+                float(torch.count_nonzero(pointer_distribution).item())
+            )
+            pointer_target_probability_query.append(
+                float(pointer_distribution[target].detach().cpu())
             )
 
             # Reset only the temporary controller state while keeping DANSN
@@ -460,6 +476,18 @@ def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
         "mean_memory_output_context_norm_at_query": (
             sum(memory_output_norm_query) / len(memory_output_norm_query)
             if memory_output_norm_query else None
+        ),
+        "mean_pointer_mix_at_query": (
+            sum(pointer_mix_query) / len(pointer_mix_query)
+            if pointer_mix_query else None
+        ),
+        "mean_pointer_candidate_count_at_query": (
+            sum(pointer_candidate_count_query) / len(pointer_candidate_count_query)
+            if pointer_candidate_count_query else None
+        ),
+        "mean_pointer_target_probability_at_query": (
+            sum(pointer_target_probability_query) / len(pointer_target_probability_query)
+            if pointer_target_probability_query else None
         ),
         "mean_update_gate_at_query": (
             sum(update_gate_query) / len(update_gate_query)
@@ -636,6 +664,9 @@ def run_benchmark(
             "mean_effective_memory_mix_at_query",
             "mean_persistent_memory_readout_norm_at_query",
             "mean_memory_output_context_norm_at_query",
+            "mean_pointer_mix_at_query",
+            "mean_pointer_candidate_count_at_query",
+            "mean_pointer_target_probability_at_query",
         ):
             values = [
                 run["results"][system][memory_key]
