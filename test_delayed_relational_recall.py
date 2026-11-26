@@ -6,6 +6,7 @@ import torch
 
 from agi import Brain
 from delayed_relational_recall import (
+    aggregate_multi_seed_results,
     build_recall_data,
     evaluate_hybrid_queries,
     ingest_context_online,
@@ -110,6 +111,52 @@ def test_query_evaluation_scores_without_mutating_graph_or_persistent_vectors():
         assert torch.equal(model.node_memory[path], value)
 
 
+
+def test_multi_seed_aggregator_reports_delay_metrics_and_memory_counts():
+    metric = {
+        "accuracy": 0.5,
+        "mean_nll": 1.5,
+        "mean_reciprocal_rank": 0.75,
+        "target_reachable_fraction": 1.0,
+        "target_memory_visible_fraction": 0.8,
+    }
+    run_a = {
+        "results": {
+            "8": {
+                "plain_gru_reset": metric,
+                "plain_gru_continuous": metric,
+                "readonly_dansn_gru_reset": metric,
+                "readonly_dansn_gru_continuous": metric,
+                "persistent_dansn_rnn_reset": metric,
+                "persistent_dansn_rnn_continuous": metric,
+                "persistent_graph_nodes": 100,
+                "persistent_memory_paths": 20,
+            }
+        }
+    }
+    run_b = {
+        "results": {
+            "8": {
+                "plain_gru_reset": {**metric, "accuracy": 1.0, "mean_nll": 0.5},
+                "plain_gru_continuous": metric,
+                "readonly_dansn_gru_reset": metric,
+                "readonly_dansn_gru_continuous": metric,
+                "persistent_dansn_rnn_reset": metric,
+                "persistent_dansn_rnn_continuous": metric,
+                "persistent_graph_nodes": 200,
+                "persistent_memory_paths": 40,
+            }
+        }
+    }
+    result = aggregate_multi_seed_results([run_a, run_b], [7, 13])
+    summary = result["summary"]["8"]
+    assert result["seeds"] == [7, 13]
+    assert summary["plain_gru_reset"]["accuracy"]["mean"] == 0.75
+    assert math.isclose(summary["plain_gru_reset"]["mean_nll"]["mean"], 1.0)
+    assert summary["persistent_graph_nodes"]["mean"] == 150.0
+    assert summary["persistent_memory_paths"]["mean"] == 30.0
+
+
 if __name__ == "__main__":
     checks = [
         test_train_and_test_query_subjects_are_disjoint_and_mappings_are_remapped,
@@ -117,6 +164,7 @@ if __name__ == "__main__":
         test_online_context_ingestion_grows_graph_and_persistent_memory_without_weight_updates,
         test_subject_prefix_can_reach_the_two_hop_location_in_graph,
         test_query_evaluation_scores_without_mutating_graph_or_persistent_vectors,
+        test_multi_seed_aggregator_reports_delay_metrics_and_memory_counts,
     ]
     for check in checks:
         check()
