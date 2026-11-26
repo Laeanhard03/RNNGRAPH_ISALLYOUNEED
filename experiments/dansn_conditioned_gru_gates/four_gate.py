@@ -284,6 +284,31 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         }
         return logits, next_state, trace
 
+    def _observe_path_gated(self, path: tuple[int, ...], strength: float) -> None:
+        """Add/reinforce observed graph edges by the scalar write-gate strength.
+
+        GraphEngine's canonical observe_sequence() uses unit increments. This
+        experiment uses fractional frequency increments so g_write can control
+        structural reinforcement without modifying agi.py.
+        """
+        strength = min(max(float(strength), 0.0), 1.0)
+        if strength <= 0.0:
+            return
+        self.engine.root.frequency += strength
+        node = self.engine.root
+        prefix: tuple[int, ...] = ()
+        for raw_token in path:
+            token_id = int(raw_token)
+            child = node.synapses.get(token_id)
+            if child is None:
+                child = node.__class__(token_id, strength)
+                node.synapses[token_id] = child
+            else:
+                child.frequency += strength
+            prefix += (token_id,)
+            self._path_nodes[prefix] = child
+            node = child
+
     def observe_target(
         self,
         history: Sequence[int],
@@ -291,7 +316,7 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         state: RecurrentState,
         confidence: float = 1.0,
     ):
-        """Reveal the scored target, grow topology, and apply the saved write gate."""
+        """Score first, then let the saved write gate control graph and vector writes."""
         if not history:
             raise ValueError("history must contain the current input token")
         target_id = int(target_id)
@@ -299,21 +324,27 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         confidence = min(max(float(confidence), 0.0), 1.0)
 
         window = tuple(int(x) for x in (*history, target_id)[-self.window_size:])
-        self._observe_path(window)
         context_length = max(self.window_size - 1, 1)
         post_context = tuple(window[-context_length:])
-        self._ensure_path(post_context)
 
         write_gate = getattr(state, "write_gate", None)
         if write_gate is None:
-            # No pre-target gate means no persistent-vector write.
             return post_context
+        if write_gate.shape[-1] != self.hidden_size:
+            raise ValueError("persistent write gate width does not match hidden_size")
 
         effective_gate = write_gate.to(
             device=self.device, dtype=self.embedding.weight.dtype
         ).clamp(0.0, 1.0) * confidence
-        if confidence <= 0.0 or float(effective_gate.max().detach().cpu()) <= self.write_threshold:
+        write_strength = float(effective_gate.mean().detach().cpu())
+        if confidence <= 0.0 or write_strength <= self.write_threshold:
             return post_context
+
+        # The same gate controls discrete edge reinforcement and the soft
+        # persistent-vector blend. The edge weight is a non-differentiable
+        # frequency statistic; vector blending remains differentiable.
+        self._observe_path_gated(window, write_strength)
+        self._ensure_path(post_context)
 
         zero = self.embedding.weight.new_zeros(self.hidden_size)
         hidden = state.hidden if state.hidden is not None else zero
