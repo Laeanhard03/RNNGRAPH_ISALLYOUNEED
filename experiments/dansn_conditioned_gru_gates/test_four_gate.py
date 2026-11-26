@@ -243,3 +243,53 @@ def test_four_gate_checkpoint_rejects_other_architectures():
         )
         with pytest.raises(ValueError, match="four-gate"):
             model.load_checkpoint(checkpoint)
+
+
+def test_four_gate_ablations_preserve_shapes_and_disable_selected_paths():
+    torch.manual_seed(43)
+    models = []
+    streams = []
+    for ablation in (
+        "full",
+        "no_memory_injection",
+        "no_persistent_write",
+        "no_graph_evidence",
+    ):
+        brain, ids = make_brain_and_stream()
+        models.append(make_model(brain, gate_ablation=ablation))
+        streams.append((brain, ids))
+
+    reference_shapes = {
+        name: tuple(value.shape)
+        for name, value in models[0].state_dict().items()
+    }
+    for model in models[1:]:
+        assert {
+            name: tuple(value.shape)
+            for name, value in model.state_dict().items()
+        } == reference_shapes
+
+    _, no_memory_state, no_memory_trace = models[1].forward_step(
+        streams[1][1][0], [streams[1][1][0]]
+    )
+    assert torch.count_nonzero(
+        no_memory_trace["memory_injection_gate"]
+    ).item() == 0
+
+    _, no_write_state, _ = models[2].forward_step(
+        streams[2][1][0], [streams[2][1][0]]
+    )
+    assert torch.count_nonzero(no_write_state.write_gate).item() == 0
+    before_nodes = models[2].graph_stats()["nodes"]
+    before_frequency = float(models[2].engine.root.frequency)
+    models[2].observe_target(
+        [streams[2][1][0]], streams[2][1][1], no_write_state
+    )
+    assert models[2].graph_stats()["nodes"] == before_nodes
+    assert float(models[2].engine.root.frequency) == before_frequency
+    assert models[2].graph_stats()["memory_nodes"] == 0
+
+    _, _, no_evidence_trace = models[3].forward_step(
+        streams[3][1][0], [streams[3][1][0]]
+    )
+    assert torch.count_nonzero(no_evidence_trace["graph_evidence"]).item() == 0
