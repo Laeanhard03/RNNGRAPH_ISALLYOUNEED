@@ -50,7 +50,7 @@ def _append_noise(tokens: list[int], rng: random.Random,
 
 def generate_dataset(
     seed: int = 7,
-    train_keys: int = 12,
+    train_keys: int = 16,
     heldout_keys: int = 12,
     value_count: int = 16,
     train_episodes: int = 8,
@@ -160,6 +160,10 @@ def generate_dataset(
             sum(query_delays.values()) / max(len(query_delays), 1)
         ),
         "vocab_size": len(ids) + 1,
+        "value_token_ids": [ids[word] for word in value_words],
+        "train_value_coverage_count": len(set(train_values)),
+        "all_value_classes_seen_in_training": set(train_values) == set(value_words),
+        "heldout_values_seen_in_training": set(test_values).issubset(set(train_values)),
         "train_associations": train_mapping_words,
         "heldout_associations": test_mapping_words,
         "test_key_ids_disjoint_from_train": not (
@@ -218,21 +222,63 @@ def _evaluate_plain(model: PlainGRU, dataset: RecallDataset) -> dict:
     hidden = None
     losses: list[float] = []
     correct = 0
+    value_only_correct = 0
+    reset_state_correct = 0
+    reset_value_only_correct = 0
+    target_value_probs: list[float] = []
+    value_probability_mass: list[float] = []
+    target_value_ranks: list[float] = []
     count = 0
+    value_ids = torch.tensor(
+        dataset.metadata["value_token_ids"], dtype=torch.long,
+        device=model.embedding.weight.device
+    )
     for index, token in enumerate(dataset.test_tokens[:-1]):
         logits, hidden = model.step(int(token), hidden)
         if index in dataset.query_paths:
             target = int(dataset.test_tokens[index + 1])
-            losses.append(float(F.cross_entropy(
-                logits.unsqueeze(0),
-                torch.tensor([target], dtype=torch.long, device=logits.device),
-            ).cpu()))
+            target_tensor = torch.tensor([target], dtype=torch.long, device=logits.device)
+            losses.append(float(F.cross_entropy(logits.unsqueeze(0), target_tensor).cpu()))
             correct += int(int(logits.argmax().item()) == target)
+
+            value_logits = logits.index_select(0, value_ids)
+            target_positions = (value_ids == target).nonzero(as_tuple=False)
+            target_position = int(target_positions[0].item())
+            value_only_correct += int(int(value_ids[value_logits.argmax()].item()) == target)
+            value_probs = torch.softmax(value_logits, dim=0)
+            target_value_probs.append(float(value_probs[target_position].cpu()))
+            value_probability_mass.append(
+                float(torch.softmax(logits, dim=0).index_select(0, value_ids).sum().cpu())
+            )
+            target_value_ranks.append(
+                float(1 + (value_logits > value_logits[target_position]).sum().item())
+            )
+
+            reset_logits, _ = model.step(int(token), None)
+            reset_state_correct += int(int(reset_logits.argmax().item()) == target)
+            reset_value_logits = reset_logits.index_select(0, value_ids)
+            reset_value_only_correct += int(
+                int(value_ids[reset_value_logits.argmax()].item()) == target
+            )
             count += 1
     mean_loss = sum(losses) / max(len(losses), 1)
     return {
         "query_count": count,
         "query_top1_accuracy": correct / max(count, 1),
+        "query_value_only_top1_accuracy": value_only_correct / max(count, 1),
+        "query_reset_state_top1_accuracy": reset_state_correct / max(count, 1),
+        "query_reset_state_value_only_top1_accuracy": reset_value_only_correct / max(count, 1),
+        "query_target_value_probability_mean": (
+            sum(target_value_probs) / len(target_value_probs) if target_value_probs else 0.0
+        ),
+        "query_value_probability_mass_mean": (
+            sum(value_probability_mass) / len(value_probability_mass)
+            if value_probability_mass else 0.0
+        ),
+        "query_target_value_rank_mean": (
+            sum(target_value_ranks) / len(target_value_ranks)
+            if target_value_ranks else 0.0
+        ),
         "query_mean_nll": mean_loss,
         "query_perplexity": math.exp(min(mean_loss, 80.0)),
         "graph_active_path_coverage": None,
@@ -246,7 +292,6 @@ def _evaluate_plain(model: PlainGRU, dataset: RecallDataset) -> dict:
         "mean_query_delay_tokens": dataset.metadata["mean_query_delay_tokens"],
         "graph_stats": None,
     }
-
 
 @torch.no_grad()
 def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
@@ -264,6 +309,15 @@ def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
     memory_gate_query: list[float] = []
     update_gate_query: list[float] = []
     reset_gate_query: list[float] = []
+    value_only_correct = 0
+    reset_state_correct = 0
+    reset_value_only_correct = 0
+    target_value_probs: list[float] = []
+    value_probability_mass: list[float] = []
+    target_value_ranks: list[float] = []
+    value_ids = torch.tensor(
+        dataset.metadata["value_token_ids"], dtype=torch.long, device=model.device
+    )
 
     for index, raw_token in enumerate(dataset.test_tokens[:-1]):
         token = int(raw_token)
@@ -280,6 +334,32 @@ def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
                 torch.tensor([target], dtype=torch.long, device=logits.device),
             ).cpu()))
             query_correct += int(int(logits.argmax().item()) == target)
+            value_logits = logits.index_select(0, value_ids)
+            target_positions = (value_ids == target).nonzero(as_tuple=False)
+            target_position = int(target_positions[0].item())
+            value_only_correct += int(
+                int(value_ids[value_logits.argmax()].item()) == target
+            )
+            value_probs = torch.softmax(value_logits, dim=0)
+            target_value_probs.append(float(value_probs[target_position].cpu()))
+            value_probability_mass.append(
+                float(torch.softmax(logits, dim=0).index_select(0, value_ids).sum().cpu())
+            )
+            target_value_ranks.append(
+                float(1 + (value_logits > value_logits[target_position]).sum().item())
+            )
+
+            # Reset only the temporary controller state while keeping DANSN
+            # graph topology and persistent vectors available for this query.
+            reset_logits, _reset_state, _reset_trace = model.forward_step(
+                token, history, model.initial_state()
+            )
+            reset_state_correct += int(int(reset_logits.argmax().item()) == target)
+            reset_value_logits = reset_logits.index_select(0, value_ids)
+            reset_value_only_correct += int(
+                int(value_ids[reset_value_logits.argmax()].item()) == target
+            )
+
             active_paths += int(expected_path in trace.get("active_paths", []))
             memory_paths += int(expected_path in model.node_memory)
 
@@ -317,6 +397,21 @@ def _evaluate_hybrid(model, dataset: RecallDataset) -> dict:
     return {
         "query_count": count,
         "query_top1_accuracy": query_correct / max(count, 1),
+        "query_value_only_top1_accuracy": value_only_correct / max(count, 1),
+        "query_reset_state_top1_accuracy": reset_state_correct / max(count, 1),
+        "query_reset_state_value_only_top1_accuracy": reset_value_only_correct / max(count, 1),
+        "query_target_value_probability_mean": (
+            sum(target_value_probs) / len(target_value_probs)
+            if target_value_probs else 0.0
+        ),
+        "query_value_probability_mass_mean": (
+            sum(value_probability_mass) / len(value_probability_mass)
+            if value_probability_mass else 0.0
+        ),
+        "query_target_value_rank_mean": (
+            sum(target_value_ranks) / len(target_value_ranks)
+            if target_value_ranks else 0.0
+        ),
         "query_mean_nll": mean_loss,
         "query_perplexity": math.exp(min(mean_loss, 80.0)),
         "graph_active_path_coverage": active_paths / max(count, 1),
@@ -451,6 +546,28 @@ def run_benchmark(
             "query_mean_nll": _stats([
                 run["results"][system]["query_mean_nll"] for run in runs
             ]),
+            "query_value_only_top1_accuracy": _stats([
+                run["results"][system]["query_value_only_top1_accuracy"] for run in runs
+            ]),
+            "query_reset_state_top1_accuracy": _stats([
+                run["results"][system]["query_reset_state_top1_accuracy"] for run in runs
+            ]),
+            "query_reset_state_value_only_top1_accuracy": _stats([
+                run["results"][system]["query_reset_state_value_only_top1_accuracy"]
+                for run in runs
+            ]),
+            "query_target_value_probability_mean": _stats([
+                run["results"][system]["query_target_value_probability_mean"]
+                for run in runs
+            ]),
+            "query_value_probability_mass_mean": _stats([
+                run["results"][system]["query_value_probability_mass_mean"]
+                for run in runs
+            ]),
+            "query_target_value_rank_mean": _stats([
+                run["results"][system]["query_target_value_rank_mean"]
+                for run in runs
+            ]),
             "graph_active_path_coverage": _stats([
                 float(run["results"][system]["graph_active_path_coverage"] or 0.0)
                 for run in runs
@@ -534,7 +651,7 @@ def main() -> None:
     parser.add_argument("--hidden-size", type=int, default=32)
     parser.add_argument("--chunk-size", type=int, default=64)
     parser.add_argument("--window-size", type=int, default=4)
-    parser.add_argument("--train-keys", type=int, default=12)
+    parser.add_argument("--train-keys", type=int, default=16)
     parser.add_argument("--heldout-keys", type=int, default=12)
     parser.add_argument("--value-count", type=int, default=16)
     parser.add_argument("--train-episodes", type=int, default=8)
