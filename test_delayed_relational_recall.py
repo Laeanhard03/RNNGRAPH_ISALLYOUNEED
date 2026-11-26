@@ -10,6 +10,7 @@ from delayed_relational_recall import (
     build_recall_data,
     evaluate_hybrid_queries,
     ingest_context_online,
+    link_shared_entity_paths,
     _make_hybrid,
 )
 
@@ -78,6 +79,108 @@ def test_subject_prefix_can_reach_the_two_hop_location_in_graph():
             path and path[0] == person_id and target_id in path
             for path in model.node_memory
         )
+
+
+def test_interleaved_fact_generator_separates_relation_edges():
+    data = build_recall_data(
+        seed=47, subject_count=12, distractor_count=8, interleave_facts=2
+    )
+    text = data["test_facts_text"]
+    first_relation_end = text.index(" .")
+    gap_start = text.index("traveler000 visits island000")
+    gap_end = text.index("traveler001 visits island001")
+    second_relation_start = text.index(" parked place")
+    assert first_relation_end < gap_start < gap_end < second_relation_start
+    assert len(data["interleaved_distractors"]) == 2
+    assert len(data["distractor_ids"]) == 6
+    assert data["interleave_facts"] == 2
+
+
+def test_unlinked_trie_stores_both_facts_but_cannot_join_their_context_paths():
+    data = build_recall_data(
+        seed=53, subject_count=12, distractor_count=8, interleave_facts=2
+    )
+    vocab = data["vocab"]
+    brain = Brain(vocab=copy.deepcopy(vocab))
+    model = _make_hybrid(
+        brain.engine, len(vocab.word_to_id) + 1,
+        hidden_size=16, window_size=9, graph_depth=8,
+    )
+    ingest_context_online(model, data["test_fact_ids"])
+
+    owns_id = vocab.word_to_id["owns"]
+    parked_id = vocab.word_to_id["parked"]
+    for subject in data["test_query_indices"]:
+        person_id = vocab.word_to_id[f"person{subject:02d}"]
+        vehicle_id = vocab.word_to_id[
+            f"vehicle{data['test_vehicle_map'][subject]:02d}"
+        ]
+        place_id = vocab.word_to_id[
+            f"place{data['test_place_map'][data['test_vehicle_map'][subject]]:02d}"
+        ]
+        assert (person_id, owns_id, vehicle_id) in model._path_nodes
+        assert any(
+            any(path[index:index + 3] == (vehicle_id, parked_id, place_id)
+                for index in range(max(len(path) - 2, 0)))
+            for path in model._path_nodes
+        )
+        start = model._longest_context_path([person_id])
+        active, _incoming = model._active_subgraph(start)
+        assert any(path and path[-1] == vehicle_id for path in active)
+        assert not any(path and path[-1] == place_id for path in active)
+
+
+def test_observed_entity_linking_joins_paths_and_makes_memory_visible():
+    data = build_recall_data(
+        seed=59, subject_count=12, distractor_count=8, interleave_facts=2
+    )
+    vocab = data["vocab"]
+    brain = Brain(vocab=copy.deepcopy(vocab))
+    model = _make_hybrid(
+        brain.engine, len(vocab.word_to_id) + 1,
+        hidden_size=16, window_size=9, graph_depth=8,
+    )
+    ingest_context_online(model, data["test_fact_ids"])
+    stats = link_shared_entity_paths(model, data["test_fact_ids"], vocab)
+
+    assert stats["observed_first_hop_facts"] == 12
+    assert stats["observed_second_hop_facts"] == 12
+    assert stats["cross_links_added"] > 0
+    assert stats["memory_aliases_added"] > 0
+    assert stats["unlinked_entities"] == 0
+
+    metrics = evaluate_hybrid_queries(
+        model, data["test_fact_ids"], data["test_query_ids"], True
+    )
+    assert metrics["target_reachable_fraction"] == 1.0
+    assert metrics["target_memory_visible_fraction"] > 0.0
+
+
+def test_entity_linking_does_not_change_weights_or_add_query_answer_writes():
+    data = build_recall_data(
+        seed=61, subject_count=12, distractor_count=8, interleave_facts=2
+    )
+    vocab = data["vocab"]
+    brain = Brain(vocab=copy.deepcopy(vocab))
+    model = _make_hybrid(
+        brain.engine, len(vocab.word_to_id) + 1,
+        hidden_size=16, window_size=9, graph_depth=8,
+    )
+    ingest_context_online(model, data["test_fact_ids"])
+    params = [parameter.detach().clone() for parameter in model.parameters()]
+    memory_before_link = {
+        path: value.detach().clone() for path, value in model.node_memory.items()
+    }
+
+    # Only facts are supplied to the linker; held-out query tuples are separate.
+    stats = link_shared_entity_paths(model, data["test_fact_ids"], vocab)
+
+    for old, new in zip(params, model.parameters()):
+        assert torch.equal(old, new.detach())
+    assert set(memory_before_link).issubset(model.node_memory)
+    assert stats["memory_aliases_added"] > 0
+    for path, value in memory_before_link.items():
+        assert torch.equal(model.node_memory[path], value)
 
 
 def test_query_evaluation_scores_without_mutating_graph_or_persistent_vectors():
@@ -161,8 +264,12 @@ if __name__ == "__main__":
     checks = [
         test_train_and_test_query_subjects_are_disjoint_and_mappings_are_remapped,
         test_fact_chain_contains_two_hops_and_target_is_not_in_query_prompt,
+        test_interleaved_fact_generator_separates_relation_edges,
         test_online_context_ingestion_grows_graph_and_persistent_memory_without_weight_updates,
         test_subject_prefix_can_reach_the_two_hop_location_in_graph,
+        test_unlinked_trie_stores_both_facts_but_cannot_join_their_context_paths,
+        test_observed_entity_linking_joins_paths_and_makes_memory_visible,
+        test_entity_linking_does_not_change_weights_or_add_query_answer_writes,
         test_query_evaluation_scores_without_mutating_graph_or_persistent_vectors,
         test_multi_seed_aggregator_reports_delay_metrics_and_memory_counts,
     ]
