@@ -116,3 +116,12 @@ The first synthetic delayed-recall run found a context-selection failure shared 
 `PersistentDANSNRNN._longest_context_path()` now prefers the longest matching suffix whose graph node has outgoing continuations or has its own persistent vector. It falls back to the longest existing terminal suffix only when no more useful suffix exists. A regression test simulates the real stream order, including observing the query marker and key after distractors, then checks that retrieval backs off to the association prefix and activates its value child.
 
 This is a retrieval correctness fix to the shared experimental recurrent adapter; canonical `agi.py` remains unchanged. The synthetic benchmark is rerun after this correction. Do not use the first run's 0% active-path coverage as a model-capability conclusion; it exposed the matcher bug.
+
+
+## First corrected synthetic mechanism result — 2026-11-27
+
+Run [45890601026](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45890601026) completed successfully; the experiment suite passed **29 tests** (one non-fatal missing-NumPy warning). The corrected matcher yielded 100% expected active-path coverage and 100% persistent-vector coverage for all write-enabled systems, while the no-persistent-write control showed 0% for both.
+
+Despite successful storage and path activation, all systems scored **0% query top-1 accuracy** across three seeds. Mean query NLL was 4.233 (plain GRU), 4.547 (readout fusion), 4.207 (three-path gate GRU), 5.111 (full four-gate DG-GRU), 5.222 (no memory injection), 4.249 (no persistent write), and 5.118 (no graph evidence). The task is therefore not yet solved end-to-end: DANSN exposes the expected stored path, but the neural decoder has not converted that retrieved representation into the correct output token. No superiority claim is justified.
+
+The next diagnostic iteration ensures every possible answer token appears during supervised training and adds value-only ranking/probability metrics plus per-query recurrent-state reset scores. This distinguishes a decoder failure from output-vocabulary competition and from reliance on transient hidden state.
