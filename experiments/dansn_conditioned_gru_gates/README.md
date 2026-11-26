@@ -171,4 +171,4 @@ Compared systems: plain GRU, readout-fusion DANSN-RNN, three-path gate-condition
 
 ### Retrieval matcher correction
 
-The first delayed-recall run exposed a terminal-suffix shadowing bug in the shared experimental graph reader. The matcher could prefer a longer, newly created suffix with no continuation over a shorter prefix that contains the learned association. The reader now backs off to the longest suffix with outgoing graph continuations or a persistent vector. A regression test reproduces the actual causal sequence. The post-fix synthetic run is the one to use when assessing recall behavior.
+The first delayed-recall run exposed a terminal-suffix shadowing bug in the shared experimental graph reader. The matcher could prefer a longer, newly created suffix with no continuation over a shorter prefix that contains the learned association. The reader now prefers the longest suffix with outgoing graph continuations; only when none exists does it fall back to a memory-only suffix, then any existing suffix. A regression test reproduces the actual causal sequence. The post-fix synthetic run is the one to use when assessing recall behavior.
