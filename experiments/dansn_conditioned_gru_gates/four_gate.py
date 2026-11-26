@@ -72,7 +72,11 @@ class DANSNFourGateCell(nn.Module):
         # Start conservatively: initially limit the memory injection and
         # persistent write paths while allowing update/reset to be learned.
         with torch.no_grad():
-            self.controller.bias[2 * hidden_size:3 * hidden_size].fill_(-2.0)
+            # Start the memory path open enough to learn from immediately.
+            # A strongly negative bias made the model learn to ignore retrieved
+            # memory before it had a chance to shape the recurrent state.
+            self.controller.bias[2 * hidden_size:3 * hidden_size].fill_(0.0)
+            # Writes remain conservative until the controller learns when to store.
             self.controller.bias[3 * hidden_size:4 * hidden_size].fill_(-2.0)
 
     def forward(
