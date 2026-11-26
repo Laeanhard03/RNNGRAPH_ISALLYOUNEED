@@ -87,6 +87,12 @@ class PersistentDANSNRNN(nn.Module):
 
         self._path_nodes: Dict[PathKey, object] = {}
         self.node_memory: Dict[PathKey, Tensor] = {}
+        # Non-differentiable quality/recency metadata keeps unreliable or stale
+        # memory from dominating retrieval and makes capacity eviction useful.
+        self.node_memory_quality: Dict[PathKey, float] = {}
+        self.node_memory_last_access: Dict[PathKey, int] = {}
+        self.node_memory_writes: Dict[PathKey, int] = {}
+        self._memory_clock = 0
         self._rebuild_path_index()
 
     @property
@@ -161,6 +167,13 @@ class PersistentDANSNRNN(nn.Module):
                     break
         return ordered, incoming
 
+    def _touch_memory(self, path: PathKey) -> None:
+        """Record an access for LRU eviction without changing the memory vector."""
+        if path not in self.node_memory:
+            return
+        self._memory_clock += 1
+        self.node_memory_last_access[path] = self._memory_clock
+
     def _read_graph(self, token_embedding: Tensor, previous_hidden: Tensor,
                     history: Sequence[int]):
         zero = token_embedding.new_zeros(self.hidden_size)
@@ -168,6 +181,10 @@ class PersistentDANSNRNN(nn.Module):
         active, incoming = self._active_subgraph(start_path)
         if not active:
             return zero, start_path, []
+
+        # Retrieval updates only LRU metadata; stored vectors remain read-only.
+        for path in active:
+            self._touch_memory(path)
 
         query = self.query_projection(torch.cat((token_embedding, previous_hidden), dim=-1))
         current: Dict[PathKey, Tensor] = {}
@@ -199,6 +216,15 @@ class PersistentDANSNRNN(nn.Module):
         keys = self.key_projection(states)
         values = self.value_projection(states)
         scores = torch.mv(keys, query) / math.sqrt(self.hidden_size)
+        # Reliability is a small log-prior only for nodes that actually have
+        # persistent memory. Structural graph nodes without a vector are not
+        # penalized for having no quality metadata.
+        quality_bias = [
+            math.log(max(self.node_memory_quality.get(path, 1.0), 1e-4))
+            if path in self.node_memory else 0.0
+            for path in active
+        ]
+        scores = scores + scores.new_tensor(quality_bias)
         structural = []
         for path in active:
             freq = max(float(self._path_nodes[path].frequency), 0.0)
@@ -299,33 +325,61 @@ class PersistentDANSNRNN(nn.Module):
         previous = self.node_memory.get(post_context, zero).to(
             device=self.device, dtype=candidate.dtype
         )
-        updated = self.memory_norm((1.0 - gate) * previous + gate * candidate)
-        self.node_memory[post_context] = updated
-        self._enforce_memory_budget(protect=post_context)
+        # Confidence zero means "do not write" exactly; avoid LayerNorm on the
+        # blended state because it would change old memory even when gate=0.
+        if confidence > 0.0:
+            candidate = self.memory_norm(candidate)
+            updated = previous + gate * (candidate - previous)
+            self.node_memory[post_context] = updated
+            old_quality = self.node_memory_quality.get(post_context, confidence)
+            self.node_memory_quality[post_context] = (
+                confidence if post_context not in self.node_memory_writes
+                else 0.9 * old_quality + 0.1 * confidence
+            )
+            self.node_memory_writes[post_context] = self.node_memory_writes.get(post_context, 0) + 1
+            self._touch_memory(post_context)
+            self._enforce_memory_budget(protect=post_context)
         return post_context
 
     def _enforce_memory_budget(self, protect: Optional[PathKey] = None) -> None:
+        """Evict least-recently-used memory; break ties by lower quality/usage."""
         while len(self.node_memory) > self.max_memory_nodes:
-            victim = next(iter(self.node_memory))
-            if victim == protect and len(self.node_memory) > 1:
-                victim = next(key for key in self.node_memory if key != protect)
+            candidates = [key for key in self.node_memory if key != protect]
+            if not candidates:
+                break
+            victim = min(
+                candidates,
+                key=lambda key: (
+                    self.node_memory_last_access.get(key, 0),
+                    self.node_memory_quality.get(key, 0.0),
+                    self.node_memory_writes.get(key, 0),
+                ),
+            )
             self.node_memory.pop(victim, None)
+            self.node_memory_quality.pop(victim, None)
+            self.node_memory_last_access.pop(victim, None)
+            self.node_memory_writes.pop(victim, None)
 
     def detach_memory(self) -> None:
         self.node_memory = {key: value.detach() for key, value in self.node_memory.items()}
 
     def graph_stats(self) -> Dict[str, int]:
         stats = self.engine.stats()
+        mean_quality = (
+            sum(self.node_memory_quality.values()) / len(self.node_memory_quality)
+            if self.node_memory_quality else 0.0
+        )
         return {
             "nodes": int(stats.get("nodes", 0)),
             "root_words": int(stats.get("root_words", 0)),
             "memory_nodes": len(self.node_memory),
+            "mean_memory_quality": mean_quality,
         }
 
     def save_checkpoint(self, path: str | Path) -> None:
         """Save model weights and sparse memory. Save Brain graph/vocab separately."""
         torch.save({
-            "format_version": 1,
+            "format_version": 2,
             "config": {
                 "hidden_size": self.hidden_size,
                 "window_size": self.window_size,
@@ -338,6 +392,10 @@ class PersistentDANSNRNN(nn.Module):
             },
             "model": self.state_dict(),
             "node_memory": {key: value.detach().cpu() for key, value in self.node_memory.items()},
+            "node_memory_quality": self.node_memory_quality,
+            "node_memory_last_access": self.node_memory_last_access,
+            "node_memory_writes": self.node_memory_writes,
+            "memory_clock": self._memory_clock,
         }, str(path))
 
     def load_checkpoint(self, path: str | Path) -> None:
@@ -345,7 +403,8 @@ class PersistentDANSNRNN(nn.Module):
             checkpoint = torch.load(str(path), map_location=self.device, weights_only=True)
         except TypeError:
             checkpoint = torch.load(str(path), map_location=self.device)
-        if checkpoint.get("format_version") != 1:
+        version = int(checkpoint.get("format_version", 1))
+        if version not in (1, 2):
             raise ValueError("unsupported checkpoint format")
         config = checkpoint["config"]
         if int(config["vocab_size"]) != self.embedding.num_embeddings:
@@ -359,6 +418,30 @@ class PersistentDANSNRNN(nn.Module):
             for key, value in checkpoint["node_memory"].items()
             if tuple(int(token) for token in key) in self._path_nodes
         }
+        valid_keys = set(self.node_memory)
+        self.node_memory_quality = {
+            tuple(int(token) for token in key): float(value)
+            for key, value in checkpoint.get("node_memory_quality", {}).items()
+            if tuple(int(token) for token in key) in valid_keys
+        }
+        self.node_memory_last_access = {
+            tuple(int(token) for token in key): int(value)
+            for key, value in checkpoint.get("node_memory_last_access", {}).items()
+            if tuple(int(token) for token in key) in valid_keys
+        }
+        self.node_memory_writes = {
+            tuple(int(token) for token in key): int(value)
+            for key, value in checkpoint.get("node_memory_writes", {}).items()
+            if tuple(int(token) for token in key) in valid_keys
+        }
+        if version == 1:
+            self.node_memory_quality = {key: 1.0 for key in valid_keys}
+            self.node_memory_writes = {key: 1 for key in valid_keys}
+        self._memory_clock = int(checkpoint.get("memory_clock", 0))
+        for key in valid_keys:
+            self.node_memory_last_access.setdefault(key, self._memory_clock)
+            self.node_memory_quality.setdefault(key, 1.0)
+            self.node_memory_writes.setdefault(key, 1)
         self._enforce_memory_budget()
 
 
