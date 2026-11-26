@@ -1,0 +1,37 @@
+name: DANSN-GRU real-corpus loader tests
+
+on:
+  push:
+    branches:
+      - feature/dansn-gated-gru-real-corpora
+    paths:
+      - "experiments/dansn_conditioned_gru_gates/**"
+      - "requirements-recurrent.txt"
+      - ".github/workflows/dansn-gru-real-corpus-tests.yml"
+  pull_request:
+    paths:
+      - "experiments/dansn_conditioned_gru_gates/**"
+      - "requirements-recurrent.txt"
+      - ".github/workflows/dansn-gru-real-corpus-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-recurrent.txt
+      - name: Install core dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-recurrent.txt pytest
+      - name: Run experiment and offline corpus tests
+        run: python -m pytest -q experiments/dansn_conditioned_gru_gates/
