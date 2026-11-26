@@ -66,6 +66,24 @@ class MemoryReadAnswerHead(nn.Module):
         return torch.matmul(projected, candidates.transpose(0, 1)) / self.temperature
 
 
+def _tie_aware_rank_metrics(
+    logits: torch.Tensor, target_index: int
+) -> Tuple[float, float, int]:
+    """Rank the target at the average position when scores are tied."""
+    log_probs = torch.log_softmax(logits, dim=-1)
+    target_score = logits[target_index]
+    tied = torch.isclose(logits, target_score, rtol=1e-6, atol=1e-8)
+    strictly_better = logits > (target_score + 1e-8)
+    better_count = int(strictly_better.sum().item())
+    tie_count = int(tied.sum().item())
+    average_rank = better_count + (tie_count + 1) / 2.0
+    return (
+        float(-log_probs[target_index].cpu()),
+        average_rank,
+        int(torch.argmax(logits).item()),
+    )
+
+
 def _place_candidates(vocab) -> Tuple[list[int], Dict[int, int]]:
     candidates = sorted(
         token_id
@@ -148,7 +166,7 @@ def evaluate_memory_answer_head(
             trace["graph_readout"], model.embedding.weight, candidate_ids
         )
         target_class = target_to_class[target_id]
-        nll, rank, prediction = _rank_metrics(logits, target_class)
+        nll, rank, prediction = _tie_aware_rank_metrics(logits, target_class)
         losses.append(nll)
         ranks.append(rank)
         correct += int(prediction == target_class)
