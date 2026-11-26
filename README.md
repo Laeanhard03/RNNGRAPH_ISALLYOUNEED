@@ -181,3 +181,6 @@ python delayed_relational_recall.py --subjects 24 --distractors 24 --interleave-
 ```
 
 This is a deliberately narrow structural probe: it tests exact repeated entity-token linking, not semantic entity resolution, aliases, pronouns, or paraphrase. The bridge is an experimental operation in the recall harness; it has not been promoted into `persistent_dansn_rnn.py` or the canonical `agi.py`.
+
+
+The interleaved evaluation now reports both generic active-memory visibility and `target_bearing_memory_visible_fraction`, which counts only memory vectors on active paths ending in the correct target token. Use the target-bearing metric when determining whether the answer-bearing state is actually exposed; generic path visibility alone is not sufficient.
