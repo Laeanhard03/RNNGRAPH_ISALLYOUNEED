@@ -181,17 +181,24 @@ def run_benchmark(epochs=3, hidden_size=48, chunk_size=8, window_size=8,
     plain_optimizer = torch.optim.AdamW(plain.parameters(), lr=learning_rate)
     plain_train = [train_plain_gru(plain, train_ids, plain_optimizer, chunk_size)
                    for _ in range(epochs)]
-    plain_test = evaluate_plain_gru(plain, test_ids)
+    plain_static = evaluate_plain_gru(plain, test_ids)
+    plain_adaptive = train_plain_gru(plain, test_ids, plain_optimizer, chunk_size)
 
-    # 2) Canonical DANSN: batch-absorb training stream, then prequential test.
+    # 2) Canonical DANSN, prebuilt from training data. Static and adaptive
+    # test runs share the same initial test-start graph because static scoring
+    # is read-only and happens first.
     dansn_brain = Brain(vocab=copy.deepcopy(vocab))
     dansn_brain.engine.read_book(train_ids, window_size)
-    dansn_test = evaluate_dansn(
+    dansn_static = evaluate_dansn(
+        dansn_brain, test_ids, window_size, adapt_after_scoring=False
+    )
+    dansn_adaptive = evaluate_dansn(
         dansn_brain, test_ids, window_size, adapt_after_scoring=True
     )
 
-    # 3) Read-only hybrid: prebuild the graph from training data, train only
-    # controller parameters, and keep both graph and memory fixed at test time.
+    # 3) Read-only hybrid: prebuild graph from training data; train the RNN
+    # while keeping graph/memory fixed. At test time report both frozen and
+    # online-RNN adaptation, with no graph or persistent-memory writes.
     readonly_brain = Brain(vocab=copy.deepcopy(vocab))
     readonly_brain.engine.read_book(train_ids, window_size)
     readonly = PersistentDANSNRNN(
@@ -203,9 +210,14 @@ def run_benchmark(epochs=3, hidden_size=48, chunk_size=8, window_size=8,
         train_read_only_hybrid(readonly, train_ids, readonly_optimizer, chunk_size)
         for _ in range(epochs)
     ]
-    readonly_test = evaluate_prequential(readonly, test_ids, update_graph=False)
+    readonly_static = evaluate_prequential(readonly, test_ids, update_graph=False)
+    readonly_adaptive = train_read_only_hybrid(
+        readonly, test_ids, readonly_optimizer, chunk_size
+    )
 
-    # 4) Writable hybrid: graph starts empty, then learns online alongside GRU.
+    # 4) Writable hybrid: graph starts empty and grows online during training.
+    # Report frozen test-start performance, then score-before-update continual
+    # adaptation with both neural updates and graph/state writes.
     coupled_brain = Brain(vocab=copy.deepcopy(vocab))
     coupled = PersistentDANSNRNN(
         coupled_brain.engine, vocab_size, hidden_size=hidden_size,
@@ -216,7 +228,10 @@ def run_benchmark(epochs=3, hidden_size=48, chunk_size=8, window_size=8,
         train_stream(coupled, train_ids, coupled_optimizer, chunk_size)
         for _ in range(epochs)
     ]
-    coupled_test = evaluate_prequential(coupled, test_ids, update_graph=True)
+    coupled_static = evaluate_prequential(coupled, test_ids, update_graph=False)
+    coupled_adaptive = train_stream(
+        coupled, test_ids, coupled_optimizer, chunk_size
+    )
 
     return {
         "protocol": {
@@ -227,28 +242,38 @@ def run_benchmark(epochs=3, hidden_size=48, chunk_size=8, window_size=8,
             "chunk_size": chunk_size,
             "window_size": window_size,
             "seed": seed,
-            "test_scoring": "predict target first, then update graph where adaptive",
+            "static_test": "score without test-time graph or parameter updates",
+            "adaptive_test": "score each target first, then apply each system's online update",
         },
         "results": {
-            "plain_gru": {"test": plain_test, "last_train": plain_train[-1]},
-            "dansn_only": {"test_prequential": dansn_test},
+            "plain_gru": {
+                "test_static": plain_static,
+                "test_adaptive_parameter_updates": plain_adaptive,
+                "last_train": plain_train[-1],
+            },
+            "dansn_only": {
+                "test_static_graph": dansn_static,
+                "test_adaptive_graph_updates": dansn_adaptive,
+            },
             "read_only_dansn_gru": {
-                "test_static_graph": readonly_test,
+                "test_static": readonly_static,
+                "test_adaptive_parameter_updates_graph_frozen": readonly_adaptive,
                 "last_train": readonly_train[-1],
                 "graph_nodes": readonly.graph_stats()["nodes"],
             },
             "persistent_dansn_rnn": {
-                "test_prequential": coupled_test,
+                "test_static": coupled_static,
+                "test_adaptive_parameter_and_graph_updates": coupled_adaptive,
                 "last_train": coupled_train[-1],
                 "graph": coupled.graph_stats(),
             },
         },
         "interpretation": (
-            "Small synthetic smoke benchmark only. Use multiple seeds and a larger "
-            "chronological corpus before drawing conclusions."
+            "Small synthetic smoke benchmark only. Compare static metrics with static "
+            "metrics and adaptive metrics with adaptive metrics. Use multiple seeds "
+            "and a larger chronological corpus before drawing conclusions."
         ),
     }
-
 
 def main():
     parser = argparse.ArgumentParser()
