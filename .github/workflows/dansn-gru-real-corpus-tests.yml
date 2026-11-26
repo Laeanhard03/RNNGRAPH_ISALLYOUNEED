@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/dansn-gated-gru-real-corpora
+      - feature/dg-gru-four-gate-control
     paths:
       - "experiments/dansn_conditioned_gru_gates/**"
       - "requirements-recurrent.txt"
