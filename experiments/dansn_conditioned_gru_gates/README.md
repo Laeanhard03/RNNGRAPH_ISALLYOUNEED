@@ -113,3 +113,45 @@ Run a same-stream comparison of plain GRU, the existing readout-fusion DANSN-GRU
 The harness trains each system on the same chronological synthetic corpus and evaluates a common held-out stream. It reports frozen/static test metrics separately from score-before-update adaptive metrics, plus parameter counts and graph-memory size. The three systems use the same hidden width, but their total parameter counts are not identical; the harness reports this rather than implying a parameter-matched comparison.
 
 Start with the one-epoch benchmark smoke test in CI. Treat the multi-seed run as an exploratory pilot. The corpus is deliberately small and synthetic; follow up with longer and harder delayed/interleaved relational-recall tests before drawing conclusions.
+
+
+## Gate-location ablations
+
+The gate_ablation option now supports three configurations:
+
+- reset_only: graph context contributes to the reset-gate preactivation only. It can influence the candidate indirectly through the reset-filtered previous hidden state.
+- update_only: graph context contributes to the update-gate preactivation only. The reset gate and candidate have no direct graph-context input.
+- full: graph context contributes to reset gate, update gate, and candidate state.
+
+Example:
+
+    model = DANSNConditionedGRU(
+        brain.engine,
+        vocab_size=len(brain.vocab.word_to_id) + 1,
+        hidden_size=48,
+        gate_ablation="reset_only",
+    )
+
+The three variants instantiate identical parameter shapes. The graph-context projection has separate reset, update, and candidate output slices; inactive slices are exactly zero-masked and receive no gradient. This preserves equal total parameter counts across the three gate ablations.
+
+## Run the ablation suite
+
+    python -m pytest -q experiments/dansn_conditioned_gru_gates/
+
+    python -m experiments.dansn_conditioned_gru_gates.ablation \
+      --epochs 3 --seeds 7,13,21 --hidden-size 48 \
+      --chunk-size 8 --window-size 8 \
+      --output experiments/dansn_conditioned_gru_gates/ablation_results.json
+
+The ablation harness compares:
+1. Plain GRU.
+2. Existing readout-fusion DANSN-GRU.
+3. DANSN-conditioned reset gate only.
+4. DANSN-conditioned update gate only.
+5. Full DANSN-conditioned reset + update + candidate paths.
+
+All use the same synthetic chronological stream and training/evaluation protocol. Each gate-conditioned variant starts from identical seed-specific parameter initialization. Static test perplexity is computed on a copy with graph memory frozen; adaptive perplexity scores each target before online neural/graph updates.
+
+For each gate ablation, gate_diagnostics reports reset/update activation mean, standard deviation, fractions below 0.05 and above 0.95, and mean graph-readout norm. These diagnostics are collected in a separate frozen pass on a model copy so they do not alter adaptive evaluation state.
+
+This is a small synthetic ablation pilot. The gate-conditioned variants are parameter-matched with each other, but the plain GRU and readout-fusion baseline have different parameter counts. Interpret static and adaptive metrics separately.
