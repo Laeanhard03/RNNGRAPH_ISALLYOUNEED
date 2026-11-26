@@ -32,7 +32,7 @@ from persistent_dansn_rnn import (
 )
 
 
-FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v2"
+FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v3"
 GRAPH_EVIDENCE_SIZE = 5
 
 
@@ -215,6 +215,11 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         del self.gate_cell
         del self.write_gate
         self.four_gate_cell = DANSNFourGateCell(hidden_size)
+        # The decoder sees the recurrent state, broad graph context, and a
+        # separate gated persistent-memory channel. This prevents the final
+        # prediction head from having to recover all associative information
+        # only through the fused hidden vector.
+        self.output = nn.Linear(3 * hidden_size, vocab_size)
         self.gate_ablation = gate_ablation
         self.write_threshold = float(write_threshold)
 
@@ -379,7 +384,12 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             memory_enabled=self.gate_ablation != "no_memory_injection",
             write_enabled=self.gate_ablation != "no_persistent_write",
         )
-        logits = self.output(torch.cat((hidden, graph_readout), dim=-1))
+        memory_output_context = (
+            gates["effective_memory_mix"] * persistent_readout
+        )
+        logits = self.output(torch.cat(
+            (hidden, graph_readout, memory_output_context), dim=-1
+        ))
         next_state = FourGateState(
             hidden=hidden,
             readout=graph_readout,
@@ -391,6 +401,7 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             "graph_readout": graph_readout,
             "persistent_memory_readout": persistent_readout,
             "persistent_memory_paths": persistent_paths,
+            "memory_output_context": memory_output_context,
             "graph_evidence": evidence,
             **gates,
         }
