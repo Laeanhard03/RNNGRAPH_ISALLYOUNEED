@@ -73,3 +73,14 @@ def test_four_gate_stores_association_and_retrieves_it_after_distractors():
     assert torch.isfinite(logits).all()
     assert expected_path in trace["active_paths"]
     assert expected_path in model.node_memory
+
+
+def test_training_covers_every_value_class_for_a_balanced_task():
+    dataset = generate_dataset(
+        seed=107, train_keys=8, heldout_keys=6, value_count=8,
+        train_episodes=2, train_delay=3, test_delay=8,
+    )
+    assert dataset.metadata["all_value_classes_seen_in_training"] is True
+    assert dataset.metadata["heldout_values_seen_in_training"] is True
+    assert len(dataset.metadata["value_token_ids"]) == 8
+    assert dataset.metadata["train_value_coverage_count"] == 8
