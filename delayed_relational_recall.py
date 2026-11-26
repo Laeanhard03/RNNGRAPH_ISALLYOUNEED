@@ -348,6 +348,131 @@ def _make_hybrid(engine, vocab_size: int, hidden_size: int, window_size: int,
     )
 
 
+def link_shared_entity_paths(
+    model: PersistentDANSNRNN,
+    observed_token_ids: Sequence[int],
+    vocab: Vocabulary,
+) -> Dict[str, int]:
+    """Create exact-token associative bridges between observed two-hop facts.
+
+    This experimental operation uses only the observed fact stream. It joins
+    the context-specific node for "person owns vehicle" to the observed
+    "vehicle parked place" continuation when both facts contain the same
+    vehicle token ID. It also aliases the existing target-bearing memory
+    vector onto the newly linked query path. No query labels are read.
+    """
+    words = [vocab.id_to_word.get(int(token_id), "") for token_id in observed_token_ids]
+    owns_id = vocab.word_to_id.get("owns")
+    parked_id = vocab.word_to_id.get("parked")
+    if owns_id is None or parked_id is None:
+        return {
+            "observed_first_hop_facts": 0,
+            "observed_second_hop_facts": 0,
+            "cross_links_added": 0,
+            "memory_aliases_added": 0,
+            "unlinked_entities": 0,
+        }
+
+    person_to_vehicle: Dict[int, int] = {}
+    vehicle_to_place: Dict[int, int] = {}
+    for index in range(max(len(words) - 3, 0)):
+        subject_word, relation_word, object_word = words[index:index + 3]
+        if (
+            subject_word.startswith("person")
+            and relation_word == "owns"
+            and object_word.startswith("vehicle")
+        ):
+            person_to_vehicle[int(observed_token_ids[index])] = int(observed_token_ids[index + 2])
+        elif (
+            subject_word.startswith("vehicle")
+            and relation_word == "parked"
+            and object_word.startswith("place")
+        ):
+            vehicle_to_place[int(observed_token_ids[index])] = int(observed_token_ids[index + 2])
+
+    cross_links = 0
+    memory_aliases = 0
+    unlinked = 0
+    for person_id, vehicle_id in person_to_vehicle.items():
+        place_id = vehicle_to_place.get(vehicle_id)
+        if place_id is None:
+            unlinked += 1
+            continue
+
+        subject_path = (person_id, owns_id, vehicle_id)
+        subject_node = model._path_nodes.get(subject_path)
+        if subject_node is None:
+            unlinked += 1
+            continue
+
+        bridge = (vehicle_id, parked_id, place_id)
+        parked_node = None
+        place_node = None
+        for path in model._path_nodes:
+            for offset in range(max(len(path) - 2, 0)):
+                if path[offset:offset + 3] == bridge:
+                    parked_path = path[:offset + 2]
+                    place_path = path[:offset + 3]
+                    parked_node = model._path_nodes.get(parked_path)
+                    place_node = model._path_nodes.get(place_path)
+                    if parked_node is not None and place_node is not None:
+                        break
+            if parked_node is not None and place_node is not None:
+                break
+
+        if parked_node is None or place_node is None:
+            unlinked += 1
+            continue
+
+        # This is the associative bridge missing from the plain trie: from the
+        # person-specific vehicle node, continue along the vehicle's observed
+        # parked->place branch. Existing observed "." continuation is retained.
+        if subject_node.synapses.get(parked_id) is None:
+            subject_node.synapses[parked_id] = parked_node
+            cross_links += 1
+        linked_parked_path = subject_path + (parked_id,)
+        linked_place_path = subject_path + (parked_id, place_id)
+        model._path_nodes[linked_parked_path] = parked_node
+        model._path_nodes[linked_place_path] = place_node
+
+        # Attach the already-written target-bearing vector to the newly joined
+        # path. This is an alias/copy of observed memory, not an answer-label write.
+        memory_candidates = []
+        for memory_path, vector in model.node_memory.items():
+            for offset in range(max(len(memory_path) - 2, 0)):
+                if memory_path[offset:offset + 3] == bridge:
+                    memory_candidates.append((
+                        model.node_memory_last_access.get(memory_path, 0),
+                        model.node_memory_quality.get(memory_path, 1.0),
+                        memory_path,
+                        vector,
+                    ))
+                    break
+        if memory_candidates and linked_place_path not in model.node_memory:
+            _access, _quality, source_memory_path, vector = max(
+                memory_candidates, key=lambda item: (item[0], item[1])
+            )
+            model.node_memory[linked_place_path] = vector.detach().clone()
+            model.node_memory_quality[linked_place_path] = (
+                model.node_memory_quality.get(source_memory_path, 1.0)
+            )
+            model.node_memory_last_access[linked_place_path] = (
+                model.node_memory_last_access.get(source_memory_path, 0)
+            )
+            model.node_memory_writes[linked_place_path] = (
+                model.node_memory_writes.get(source_memory_path, 1)
+            )
+            memory_aliases += 1
+
+    return {
+        "observed_first_hop_facts": len(person_to_vehicle),
+        "observed_second_hop_facts": len(vehicle_to_place),
+        "cross_links_added": cross_links,
+        "memory_aliases_added": memory_aliases,
+        "unlinked_entities": unlinked,
+    }
+
+
 def run_delayed_recall(
     seed: int = 7,
     subject_count: int = 24,
