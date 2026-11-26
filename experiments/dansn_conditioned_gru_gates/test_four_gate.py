@@ -69,6 +69,7 @@ def test_forward_calculates_four_gates_without_writing_graph_memory():
     logits, state, trace = model.forward_step(ids[0], [ids[0]])
 
     assert logits.shape == (len(brain.vocab.word_to_id) + 1,)
+    assert model.output.in_features == 3 * model.hidden_size
     assert torch.isfinite(logits).all()
     assert isinstance(state, FourGateState)
     assert state.write_gate is not None
@@ -275,6 +276,9 @@ def test_four_gate_ablations_preserve_shapes_and_disable_selected_paths():
     assert torch.count_nonzero(
         no_memory_trace["memory_injection_gate"]
     ).item() == 0
+    assert torch.count_nonzero(
+        no_memory_trace["memory_output_context"]
+    ).item() == 0
 
     _, no_write_state, _ = models[2].forward_step(
         streams[2][1][0], [streams[2][1][0]]
@@ -429,6 +433,7 @@ def test_four_gate_reads_direct_persistent_child_vector_into_recurrent_state():
         trace["persistent_memory_readout"]
     ).item() > 0.0
     assert trace["effective_memory_mix"].max().item() > 0.0
+    assert torch.linalg.vector_norm(trace["memory_output_context"]).item() > 0.0
     assert torch.isfinite(next_state.hidden).all()
 
 
