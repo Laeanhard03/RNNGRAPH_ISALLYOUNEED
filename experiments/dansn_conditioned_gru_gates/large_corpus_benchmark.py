@@ -25,6 +25,7 @@ from benchmark_continual_learning import (
 from persistent_dansn_rnn import PersistentDANSNRNN, evaluate_prequential, train_stream
 from experiments.dansn_conditioned_gru_gates.corpus import load_encoded_corpus
 from experiments.dansn_conditioned_gru_gates.model import DANSNConditionedGRU
+from experiments.dansn_conditioned_gru_gates.four_gate import DANSNFourGateGRU
 
 
 def _parameter_count(model) -> int:
@@ -49,6 +50,8 @@ def _new_hybrid(vocab, hidden_size: int, window_size: int, kind: str):
         return DANSNConditionedGRU(**common, gate_ablation="full")
     if kind == "gate_update_only":
         return DANSNConditionedGRU(**common, gate_ablation="update_only")
+    if kind == "four_gate":
+        return DANSNFourGateGRU(**common, gate_ablation="full")
     raise ValueError(f"unknown hybrid kind: {kind}")
 
 
@@ -89,7 +92,7 @@ def run_one_seed(
 
     # Hybrid baselines and gate placements use independent empty graph memories.
     for offset, kind in enumerate(
-        ("readout_fusion", "gate_update_only", "gate_full"), start=1
+        ("readout_fusion", "gate_update_only", "gate_full", "four_gate"), start=1
     ):
         torch.manual_seed(seed + offset)
         model = _new_hybrid(
@@ -166,7 +169,7 @@ def run_benchmark(
         for seed in seed_list
     ]
 
-    systems = ("plain_gru", "readout_fusion", "gate_update_only", "gate_full")
+    systems = ("plain_gru", "readout_fusion", "gate_update_only", "gate_full", "four_gate")
     summary = {}
     for system in systems:
         summary[system] = {
