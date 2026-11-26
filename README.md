@@ -189,3 +189,22 @@ The interleaved evaluation now reports both generic active-memory visibility and
 ### Interleaved relational-recall pilot result
 
 The 24-subject, three-seed interleaved experiment completed in GitHub Actions [45868295697](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45868295697). With 8 unrelated fact pairs inserted between the two relation groups, the unlinked persistent trie had 0% target reachability and 0% target-bearing memory visibility. The observed exact-entity bridge linked all 24 vehicle relations per seed and raised both diagnostics to 100% at delays 0 and 8. However, the linked model still got 0/18 held-out queries correct at both delays. Continuous-state NLL improved modestly (4.993 to 4.828 at delay 0; 4.877 to 4.651 at delay 8), without a top-1 accuracy gain. This proves a narrow structural path-joining capability, not reliable relational answering. The complete setup, metrics and limitations are in [DELAYED_RELATIONAL_RECALL_PILOT_RESULTS.md](DELAYED_RELATIONAL_RECALL_PILOT_RESULTS.md). The exact-token linker remains an experiment; neither `agi.py` nor `persistent_dansn_rnn.py` was changed.
+
+
+## DANSN-conditioned GRU on larger corpora
+
+A follow-on experiment to `feature/dansn-conditioned-gru-gates` lives on
+`feature/dansn-gated-gru-real-corpora`. It preserves the canonical
+`agi.py` engine and the earlier synthetic gate experiment.
+
+The new branch adds:
+- Streaming WikiText-103 and optional PG-19 corpus loaders.
+- Train-only vocabulary construction with a fixed UNK mapping for validation/test.
+- A larger-corpus comparison of plain GRU, readout-fusion DANSN-GRU,
+  update-gate-only DANSN-GRU, and fully gate-conditioned DANSN-GRU.
+- Separate frozen/static and score-before-write DANSN-memory evaluation.
+- Offline corpus tests and GitHub Actions workflows.
+
+See [the dataset and run guide](experiments/dansn_conditioned_gru_gates/DATASETS.md).
+Dataset binaries are downloaded/cached at run time and are not committed here.
+Start with bounded token budgets before attempting a full PG-19 run.
