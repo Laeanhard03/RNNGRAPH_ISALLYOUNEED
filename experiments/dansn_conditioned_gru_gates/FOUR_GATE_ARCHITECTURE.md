@@ -81,11 +81,11 @@ python -m experiments.dansn_conditioned_gru_gates.large_corpus_benchmark \
   --output benchmark-results/wikitext103_four_gate_dggru.json
 ```
 
-The benchmark includes plain GRU, readout-fusion DANSN-GRU, update-only conditioned GRU, full three-path gate-conditioned GRU, and the four-gate DG-GRU. Static test metrics and score-before-write prequential memory-only metrics are separate. Parameter counts are reported, not assumed to match.
+The benchmark includes plain GRU, readout-fusion DANSN-GRU, update-only conditioned GRU, full three-path gate-conditioned GRU, the full four-gate DG-GRU, and three four-gate ablations (no memory injection, no persistent write, and no graph evidence). Static test metrics and score-before-write prequential memory-only metrics are separate. Parameter counts are reported, not assumed to match. The four-gate variants retain identical parameter shapes; the ablations zero the selected path rather than deleting its parameters.
 
 ## Important limitations
 
-Graph-neighborhood selection and discrete topology updates are non-differentiable. Gradients flow through the selected-node readout, controller, four gates, candidate computation, and persistent vectors during truncated BPTT. Graph evidence is a heuristic structural summary, not a calibrated probability of retrieval correctness. The persistent write gate controls vector writes, not whether observed token edges are added to DANSN topology.
+Graph-neighborhood selection and discrete topology updates are non-differentiable. Gradients flow through the selected-node readout, controller, four gates, candidate computation, and persistent vectors during truncated BPTT. Graph evidence is a heuristic structural summary, not a calibrated probability of retrieval correctness. The persistent write gate controls both fractional graph-edge frequency reinforcement and persistent vector writes after target scoring; it does not make discrete edge creation differentiable.
 
 This architecture is a research hypothesis. Do not claim it outperforms readout-fusion or three-gate variants until multi-seed real-corpus and delayed/interleaved relational-recall results support that claim.
 
