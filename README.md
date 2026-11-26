@@ -109,7 +109,7 @@ person owns vehicle . vehicle parked place .
 where person -> predict place
 ```
 
-The training and test knowledge bases use independently randomized person-to-vehicle and vehicle-to-place mappings. Only a subset of subjects receives query supervision during training; the remaining subjects are held out. At test time, a fresh graph absorbs the remapped facts sequentially with neural weights frozen. We evaluate the answer with recurrent state preserved and reset. The read-only hybrid receives the same test facts as graph topology but has no persistent node vectors; the plain GRU receives no external graph.
+The training and test knowledge bases use independently randomized person-to-vehicle and vehicle-to-place mappings. Only a subset of subjects receives query supervision during training; the remaining subjects are held out. At test time, a fresh graph absorbs the remapped facts sequentially with neural weights frozen. We evaluate the answer with recurrent state preserved and reset. The read-only hybrid receives the same test facts as graph topology but has no persistent node vectors; the plain GRU receives no external graph. Query supervision trains the readout/controller but deliberately does not write the known answer as a shortcut edge; test answers must be retrieved from the two-hop fact path.
 
 Run:
 
