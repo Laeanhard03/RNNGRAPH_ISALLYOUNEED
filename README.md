@@ -184,3 +184,8 @@ This is a deliberately narrow structural probe: it tests exact repeated entity-t
 
 
 The interleaved evaluation now reports both generic active-memory visibility and `target_bearing_memory_visible_fraction`, which counts only memory vectors on active paths ending in the correct target token. Use the target-bearing metric when determining whether the answer-bearing state is actually exposed; generic path visibility alone is not sufficient.
+
+
+### Interleaved relational-recall pilot result
+
+The 24-subject, three-seed interleaved experiment completed in GitHub Actions [45868295697](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45868295697). With 8 unrelated fact pairs inserted between the two relation groups, the unlinked persistent trie had 0% target reachability and 0% target-bearing memory visibility. The observed exact-entity bridge linked all 24 vehicle relations per seed and raised both diagnostics to 100% at delays 0 and 8. However, the linked model still got 0/18 held-out queries correct at both delays. Continuous-state NLL improved modestly (4.993 to 4.828 at delay 0; 4.877 to 4.651 at delay 8), without a top-1 accuracy gain. This proves a narrow structural path-joining capability, not reliable relational answering. The complete setup, metrics and limitations are in [DELAYED_RELATIONAL_RECALL_PILOT_RESULTS.md](DELAYED_RELATIONAL_RECALL_PILOT_RESULTS.md). The exact-token linker remains an experiment; neither `agi.py` nor `persistent_dansn_rnn.py` was changed.
