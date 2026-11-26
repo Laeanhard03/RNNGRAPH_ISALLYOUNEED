@@ -36,14 +36,18 @@ From the repository root:
       --epochs 1 --seeds 7 \
       --output benchmark-results/wikitext103_dggru.json
 
-The runner compares:
+The runner compares eight systems:
 
 1. Plain GRU.
 2. Existing readout-fusion DANSN-GRU.
 3. DANSN-conditioned update-gate-only GRU.
 4. Full DANSN-conditioned reset + update + candidate GRU.
+5. Full four-gate DG-GRU.
+6. Four-gate without memory injection.
+7. Four-gate without persistent writes (both graph-frequency reinforcement and persistent vectors).
+8. Four-gate without graph evidence.
 
-All systems receive the same chronological training stream and train-only vocabulary. Validation/test out-of-vocabulary words map to one fixed UNK token; validation/test never expand the vocabulary.
+The three four-gate ablations keep the same parameter shapes as the full model and zero only the selected information/control path. All systems receive the same chronological training stream and train-only vocabulary. Validation/test out-of-vocabulary words map to one fixed UNK token; validation/test never expand the vocabulary.
 
 For PG-19, begin with a small subset:
 
