@@ -7,6 +7,8 @@ on:
     paths:
       - "experiments/dansn_conditioned_gru_gates/associative_recall.py"
       - "experiments/dansn_conditioned_gru_gates/test_associative_recall.py"
+      - "experiments/dansn_conditioned_gru_gates/test_four_gate.py"
+      - "experiments/dansn_conditioned_gru_gates/four_gate.py"
       - "persistent_dansn_rnn.py"
       - ".github/workflows/dansn-associative-recall.yml"
   workflow_dispatch:
