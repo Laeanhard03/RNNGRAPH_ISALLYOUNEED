@@ -149,3 +149,8 @@ python memory_read_supervision.py --subjects 24 --distractors 24 --delays 0,8,24
 ```
 
 This is still a fixed-vocabulary synthetic task with held-out subjects and independently remapped test relationships. Results must be interpreted as a controlled prototype experiment, not evidence of robust relational reasoning. The canonical `agi.py` and persistent-memory core are unchanged.
+
+
+### Pilot result (3 seeds)
+
+The full result is in [MEMORY_READ_SUPERVISION_PILOT_RESULTS.md](MEMORY_READ_SUPERVISION_PILOT_RESULTS.md). The final tie-aware CI run [45865069032](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45865069032) passed all tests and the three-seed benchmark. The persistent memory-read answer head reached 11.11% ± 7.86 pp accuracy with recurrent state reset (2 correct out of 18 queries), versus 0% for the matched topology-only read-head ablation; with recurrent state preserved it reached 5.56% ± 7.86 pp (1/18). Its mean reciprocal rank improved over the uniform ablation, but mean NLL remained worse than uniform guessing (3.694–4.155 versus 3.178). The main next-token output head still had 0% continuous-state accuracy. This is a weak ranking signal, not reliable recall or calibrated answer selection; do not promote the auxiliary head into the core yet.
