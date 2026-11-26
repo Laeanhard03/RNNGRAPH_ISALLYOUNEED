@@ -257,3 +257,44 @@ Compare static metrics only against static metrics, and adaptive metrics only ag
 - Persistent vectors live in a sparse external map keyed by stable graph paths rather than fields added to the original `Neuron` class.
 - Dynamic vocabulary expansion, provenance/contradiction handling, abstract idea/concept merging, batching, and larger multi-corpus comparisons remain future work.
 - The canonical `agi.py` file has not been modified. The adapter is an isolated experiment and must remain separate until validated.
+
+
+## 12. Delayed two-hop relational recall experiment
+
+The new `delayed_relational_recall.py` experiment tests whether a trained controller can use DANSN memory to answer a relationship lookup after unrelated material has intervened.
+
+### Task structure
+
+The observed knowledge base contains two-hop chains:
+
+```text
+person owns vehicle . vehicle parked place .
+```
+
+After the primary facts, the stream contains a variable number of unrelated two-hop distractor facts. The held-out query is:
+
+```text
+where person
+```
+
+The next-token target is the correct `place`. The test knowledge base uses independently randomized person-to-vehicle and vehicle-to-place mappings. Only a subset of person IDs is used for query supervision during training; the remaining query subjects are held out. Entity vocabulary is shared and fixed so this experiment tests relationship retrieval rather than vocabulary expansion.
+
+### Systems and protocol
+
+- **Plain GRU:** trained on the same fact/distractor stream and query supervision, with no external graph.
+- **Read-only DANSN-GRU:** its graph topology is built from the observed test facts, but it has no persistent node vectors.
+- **Persistent DANSN-RNN:** it absorbs the new test fact stream one target at a time. Each target is exposed to `observe_target` only after the corresponding forward step. Neural weights are frozen during test-context ingestion.
+
+All systems are evaluated with recurrent state both preserved and reset before the query. The reset-state comparison asks whether the graph can serve as memory independently of the active recurrent state. Query scoring itself does not write the answer into memory.
+
+Metrics: exact answer accuracy, answer NLL, mean reciprocal rank, whether the correct target is reachable in the retrieved neighborhood, and whether a persistent-memory path is among retrieved paths.
+
+### Important scope boundary
+
+The two edges in the main chain are adjacent in the serialized fact stream (`person owns vehicle . vehicle parked place`); the distractors occur after the chain and before the query. This is a delayed two-hop recall test over the current path-based DANSN representation. It does **not** yet test arbitrary joining of two facts separated by intervening unrelated facts, or general semantic concept linking. A separate cross-link/entity-node experiment would be needed for that stronger claim.
+
+### Files and automated checks
+
+- `delayed_relational_recall.py` — dataset generation, online fact ingestion, query evaluation, delay levels, and multi-seed aggregation.
+- `test_delayed_relational_recall.py` — held-out split, remapping, causal ingestion, two-hop target reachability, and read-only query-evaluation tests.
+- GitHub Actions adds the recall tests, a small benchmark smoke run, and a JSON artifact upload. Results are pending CI verification; no accuracy claim is made until the run completes.
