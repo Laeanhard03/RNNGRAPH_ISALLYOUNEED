@@ -96,7 +96,7 @@ def test_memory_injection_gate_controls_memory_contribution():
     assert not torch.allclose(hidden_full, hidden_no_memory)
 
 
-def test_write_gate_zero_skips_persistent_vector_but_still_observes_topology():
+def test_write_gate_zero_skips_graph_and_persistent_vector_writes():
     torch.manual_seed(19)
     brain, ids = make_brain_and_stream()
     model = make_model(brain)
@@ -104,22 +104,43 @@ def test_write_gate_zero_skips_persistent_vector_but_still_observes_topology():
     state.write_gate = torch.zeros_like(state.write_gate)
 
     before_nodes = model.graph_stats()["nodes"]
+    before_frequency = float(model.engine.root.frequency)
     path = model.observe_target([ids[0]], ids[1], state)
 
-    assert model.graph_stats()["nodes"] > before_nodes
+    assert model.graph_stats()["nodes"] == before_nodes
+    assert float(model.engine.root.frequency) == before_frequency
     assert model.graph_stats()["memory_nodes"] == 0
     assert path not in model.node_memory
 
 
-def test_confidence_zero_prevents_persistent_write_exactly():
+def test_confidence_zero_prevents_graph_and_persistent_writes_exactly():
     torch.manual_seed(23)
     brain, ids = make_brain_and_stream()
     model = make_model(brain)
     _, state, _ = model.forward_step(ids[0], [ids[0]])
+    before_nodes = model.graph_stats()["nodes"]
+    before_frequency = float(model.engine.root.frequency)
 
     model.observe_target([ids[0]], ids[1], state, confidence=0.0)
 
+    assert model.graph_stats()["nodes"] == before_nodes
+    assert float(model.engine.root.frequency) == before_frequency
     assert model.graph_stats()["memory_nodes"] == 0
+
+
+def test_write_gate_strength_scales_graph_path_reinforcement():
+    torch.manual_seed(27)
+    brain, ids = make_brain_and_stream()
+    model = make_model(brain)
+    _, state, _ = model.forward_step(ids[0], [ids[0]])
+    state.write_gate = torch.full_like(state.write_gate, 0.4)
+
+    model.observe_target([ids[0]], ids[1], state, confidence=0.5)
+
+    observed_path = tuple(ids[:2])
+    assert observed_path in model._path_nodes
+    assert abs(float(model._path_nodes[observed_path].frequency) - 0.2) < 1e-6
+    assert observed_path in model.node_memory
 
 
 def test_write_gate_is_applied_after_target_scoring_and_controls_write_strength():
