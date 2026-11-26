@@ -349,3 +349,14 @@ Do not treat this linker as part of the core architecture yet. Its purpose is to
 
 
 The interleaved evaluator distinguishes `target_memory_visible_fraction` (any persistent-memory path in the active neighborhood) from `target_bearing_memory_visible_fraction` (a memory path in that neighborhood whose final token is the correct answer). Only the latter establishes that the correct target-bearing memory vector is exposed to the query.
+
+
+## Interleaved relational-recall pilot result — 2026-11-27
+
+The three-seed interleaved run [45868295697](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45868295697) completed successfully with 24 subjects, 8 distractor fact pairs between the relation groups, 18 held-out query subjects total across seeds, delays 0/8, three epochs, and hidden size 32.
+
+The unlinked persistent trie had 0% target reachability and 0% target-bearing memory visibility. The exact-token entity bridge added 24 cross-links and 24 aliases of observed memory per seed, with zero unlinked entities, and made the correct target reachable and target-bearing memory visible for 100% of held-out queries. But the linked model still achieved 0/18 top-1 answers at both delays. Its continuous-state NLL improved from 4.993 to 4.828 (delay 0) and 4.877 to 4.651 (delay 8), but no correct top-1 predictions emerged. Reset-state MRR was slightly lower for the linked system at delay 0.
+
+This separates successful structural joining from unsuccessful answer decoding. The exact-entity bridge is a task-specific diagnostic, not a general semantic linker and not a core architecture change. The next experiment should inspect attention/contribution on target-bearing paths and test a query-time pointer/candidate decoder over the reachable place nodes, without exposing query answer labels. Full results are recorded in [DELAYED_RELATIONAL_RECALL_PILOT_RESULTS.md](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/blob/main/DELAYED_RELATIONAL_RECALL_PILOT_RESULTS.md).
+
+Canonical `agi.py` and the persistent-memory adapter remain unchanged.
