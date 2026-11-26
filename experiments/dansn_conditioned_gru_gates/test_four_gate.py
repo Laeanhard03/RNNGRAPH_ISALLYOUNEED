@@ -452,3 +452,32 @@ def test_memory_injection_gate_starts_open_while_write_gate_starts_conservative(
 
     assert 0.35 < gates["memory_injection_gate"].mean().detach().item() < 0.65
     assert gates["persistent_write_gate"].mean().detach().item() < 0.2
+
+
+def test_prediction_loss_backpropagates_through_persistent_memory_decoder_channel():
+    torch.manual_seed(71)
+    brain = Brain()
+    ctx, key, value = brain.vocab.tokenize(
+        "recallctx keyalpha valueomega"
+    )
+    model = make_model(brain)
+
+    # Build one persistent association causally before the query.
+    _, support_state, _ = model.forward_step(key, [ctx, key])
+    support_state.write_gate = torch.ones_like(support_state.write_gate)
+    model.observe_target([ctx, key], value, support_state)
+
+    logits, _state, trace = model.forward_step(
+        key, [ctx, key], model.initial_state()
+    )
+    loss = F.cross_entropy(
+        logits.unsqueeze(0),
+        torch.tensor([value], dtype=torch.long),
+    )
+    loss.backward()
+
+    memory_slice = model.output.weight.grad[:, 2 * model.hidden_size:]
+    assert memory_slice is not None
+    assert torch.isfinite(memory_slice).all()
+    assert torch.linalg.vector_norm(memory_slice).item() > 0.0
+    assert torch.linalg.vector_norm(trace["memory_output_context"]).item() > 0.0
