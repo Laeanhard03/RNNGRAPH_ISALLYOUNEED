@@ -32,7 +32,7 @@ from persistent_dansn_rnn import (
 )
 
 
-FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v3"
+FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v4"
 GRAPH_EVIDENCE_SIZE = 5
 
 
@@ -277,35 +277,35 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         previous_hidden: Tensor,
         matched_path,
         active_paths: Sequence[tuple[int, ...]],
-    ) -> tuple[Tensor, list[tuple[int, ...]]]:
-        """Retrieve stored vectors on the matched context's outgoing branches.
+    ) -> tuple[Tensor, list[tuple[int, ...]], Tensor, bool]:
+        """Read persistent vectors and build a direct next-token pointer.
 
         The broad graph readout performs transient message passing over a
-        neighborhood. This readout is deliberately separate: it attends only
-        to persistent vectors stored on immediate answer continuations of the
-        selected context. If no direct continuation has a stored vector, it
-        falls back to memory-bearing active paths.
+        neighborhood. This readout attends to persistent vectors on immediate
+        outgoing continuations of the matched context. If no direct continuation
+        has a stored vector, it falls back to memory-bearing active paths for
+        vector state fusion, but does not emit a token pointer from that fallback.
+        The pointer head is therefore grounded only in actual next-token edges.
         """
         zero = token_embedding.new_zeros(self.hidden_size)
+        pointer = token_embedding.new_zeros(self.embedding.num_embeddings)
         if not active_paths:
-            return zero, []
+            return zero, [], pointer, False
 
-        active_set = set(active_paths)
-        candidates: list[tuple[int, ...]] = []
+        direct_candidates: list[tuple[int, ...]] = []
         if matched_path is not None:
             prefix_len = len(matched_path)
-            candidates = [
+            direct_candidates = [
                 path for path in active_paths
                 if len(path) == prefix_len + 1
                 and path[:prefix_len] == matched_path
                 and path in self.node_memory
             ]
+        candidates = direct_candidates or [
+            path for path in active_paths if path in self.node_memory
+        ]
         if not candidates:
-            candidates = [
-                path for path in active_paths if path in self.node_memory
-            ]
-        if not candidates:
-            return zero, []
+            return zero, [], pointer, False
 
         query = self.query_projection(
             torch.cat((token_embedding, previous_hidden), dim=-1)
@@ -344,7 +344,16 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         retrieved = torch.sum(
             torch.stack(values, dim=0) * weights.unsqueeze(-1), dim=0
         )
-        return retrieved, candidates
+
+        pointer_available = bool(direct_candidates)
+        if pointer_available:
+            candidate_ids = torch.tensor(
+                [int(path[-1]) for path in direct_candidates],
+                dtype=torch.long,
+                device=self.device,
+            )
+            pointer = pointer.scatter_add(0, candidate_ids, weights)
+        return retrieved, candidates, pointer, pointer_available
 
     def forward_step(
         self,
@@ -367,7 +376,12 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         graph_readout, matched_path, active_paths = self._read_graph(
             token_embedding, previous_hidden, history
         )
-        persistent_readout, persistent_paths = self._read_persistent_memory(
+        (
+            persistent_readout,
+            persistent_paths,
+            persistent_token_distribution,
+            pointer_available,
+        ) = self._read_persistent_memory(
             token_embedding, previous_hidden, matched_path, active_paths
         )
         evidence = self._graph_evidence(matched_path, active_paths, token_embedding)
@@ -387,9 +401,23 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         memory_output_context = (
             gates["effective_memory_mix"] * persistent_readout
         )
-        logits = self.output(torch.cat(
+        neural_logits = self.output(torch.cat(
             (hidden, graph_readout, memory_output_context), dim=-1
         ))
+        neural_probabilities = torch.softmax(neural_logits, dim=-1)
+        pointer_mix = (
+            gates["effective_memory_mix"].mean()
+            if pointer_available else neural_logits.new_zeros(())
+        )
+        mixed_probabilities = (
+            (1.0 - pointer_mix) * neural_probabilities
+            + pointer_mix * persistent_token_distribution
+        )
+        # The DANSN pointer is a causal next-edge distribution. It is available
+        # only when the pre-target matched context has stored outgoing vectors.
+        # The memory gate controls how much of this associative distribution is
+        # blended with the GRU's learned vocabulary distribution.
+        logits = torch.log(mixed_probabilities.clamp_min(1e-9))
         next_state = FourGateState(
             hidden=hidden,
             readout=graph_readout,
@@ -402,6 +430,10 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             "persistent_memory_readout": persistent_readout,
             "persistent_memory_paths": persistent_paths,
             "memory_output_context": memory_output_context,
+            "neural_probabilities": neural_probabilities,
+            "persistent_token_distribution": persistent_token_distribution,
+            "effective_pointer_mix": pointer_mix,
+            "pointer_available": pointer_available,
             "graph_evidence": evidence,
             **gates,
         }
