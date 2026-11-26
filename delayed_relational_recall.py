@@ -484,11 +484,18 @@ def run_delayed_recall(
     graph_depth: int = 8,
     chunk_size: int = 16,
     learning_rate: float = 2e-3,
+    interleave_facts: int = 0,
 ) -> Dict[str, object]:
-    if not delays or any(delay < 0 or delay > distractor_count for delay in delays):
-        raise ValueError("delays must be non-empty and within [0, distractor_count]")
+    if interleave_facts < 0 or interleave_facts > distractor_count:
+        raise ValueError("interleave_facts must be within [0, distractor_count]")
+    remaining_distractors = distractor_count - interleave_facts
+    if not delays or any(delay < 0 or delay > remaining_distractors for delay in delays):
+        raise ValueError("delays must be non-empty and within remaining distractor facts")
     torch.manual_seed(seed)
-    data = build_recall_data(seed, subject_count, distractor_count)
+    data = build_recall_data(
+        seed, subject_count, distractor_count,
+        interleave_facts=interleave_facts,
+    )
     vocab = data["vocab"]
     vocab_size = len(vocab.word_to_id) + 1
 
@@ -516,12 +523,34 @@ def run_delayed_recall(
                             window_size, graph_depth)
     writable_optimizer = torch.optim.AdamW(writable.parameters(), lr=learning_rate)
 
+    # In the interleaved condition, train a matched model that additionally
+    # links context-specific entity occurrences using only observed facts.
+    linked_writable = None
+    linked_optimizer = None
+    if interleave_facts > 0:
+        linked_brain = Brain(vocab=copy.deepcopy(vocab))
+        linked_writable = _make_hybrid(
+            linked_brain.engine, vocab_size, hidden_size, window_size, graph_depth
+        )
+        linked_writable.load_state_dict({
+            key: value.detach().clone()
+            for key, value in writable.state_dict().items()
+        })
+        linked_optimizer = torch.optim.AdamW(
+            linked_writable.parameters(), lr=learning_rate
+        )
+
     training_history = {"plain_query_loss": [], "readonly_query_loss": [],
-                        "writable_query_loss": []}
+                        "writable_query_loss": [], "entity_linked_query_loss": []}
     for _epoch in range(epochs):
         train_plain_gru(plain, train_prefix, plain_optimizer, chunk_size)
         train_read_only_hybrid(readonly, train_prefix, readonly_optimizer, chunk_size)
         train_stream(writable, train_prefix, writable_optimizer, chunk_size)
+        if linked_writable is not None and linked_optimizer is not None:
+            train_stream(
+                linked_writable, train_prefix, linked_optimizer, chunk_size
+            )
+            link_shared_entity_paths(linked_writable, train_prefix, vocab)
 
         query_order = list(data["train_query_ids"])
         random.Random(seed + _epoch + 9).shuffle(query_order)
@@ -538,9 +567,19 @@ def run_delayed_recall(
             training_history["writable_query_loss"].append(
                 train_hybrid_query(writable, query, writable_optimizer, write_memory=False)
             )
+            if linked_writable is not None and linked_optimizer is not None:
+                training_history["entity_linked_query_loss"].append(
+                    train_hybrid_query(
+                        linked_writable, query, linked_optimizer, write_memory=False
+                    )
+                )
 
     readonly_weights = {key: value.detach().clone() for key, value in readonly.state_dict().items()}
     writable_weights = {key: value.detach().clone() for key, value in writable.state_dict().items()}
+    linked_weights = (
+        {key: value.detach().clone() for key, value in linked_writable.state_dict().items()}
+        if linked_writable is not None else None
+    )
 
     results: Dict[str, object] = {
         "protocol": {
@@ -549,6 +588,9 @@ def run_delayed_recall(
             "training_query_subjects": len(data["train_query_ids"]),
             "held_out_query_subjects": len(test_queries),
             "distractor_facts": distractor_count,
+            "interleaved_distractor_facts_between_relation_edges": interleave_facts,
+            "remaining_trailing_distractor_facts": remaining_distractors,
+            "relation_edges_separated": interleave_facts > 0,
             "delays": list(delays),
             "epochs": epochs,
             "hidden_size": hidden_size,
@@ -563,6 +605,10 @@ def run_delayed_recall(
             "plain_query_nll_mean": sum(training_history["plain_query_loss"]) / max(len(training_history["plain_query_loss"]), 1),
             "readonly_query_nll_mean": sum(training_history["readonly_query_loss"]) / max(len(training_history["readonly_query_loss"]), 1),
             "writable_query_nll_mean": sum(training_history["writable_query_loss"]) / max(len(training_history["writable_query_loss"]), 1),
+            "entity_linked_query_nll_mean": (
+                sum(training_history["entity_linked_query_loss"])
+                / max(len(training_history["entity_linked_query_loss"]), 1)
+            ),
         },
         "results": {},
         "interpretation": (
@@ -602,6 +648,26 @@ def run_delayed_recall(
         wr_reset = evaluate_hybrid_queries(wr_model, test_prefix, test_queries, True)
         wr_continuous = evaluate_hybrid_queries(wr_model, test_prefix, test_queries, False)
 
+        linked_reset = None
+        linked_continuous = None
+        entity_link_stats = None
+        if linked_weights is not None:
+            linked_brain = Brain(vocab=copy.deepcopy(vocab))
+            linked_model = _make_hybrid(
+                linked_brain.engine, vocab_size, hidden_size, window_size, graph_depth
+            )
+            linked_model.load_state_dict(linked_weights)
+            ingest_context_online(linked_model, test_prefix)
+            entity_link_stats = link_shared_entity_paths(
+                linked_model, test_prefix, vocab
+            )
+            linked_reset = evaluate_hybrid_queries(
+                linked_model, test_prefix, test_queries, True
+            )
+            linked_continuous = evaluate_hybrid_queries(
+                linked_model, test_prefix, test_queries, False
+            )
+
         # Plain recurrent state is evaluated both with and without the prefix.
         plain_reset_model = plain
         plain_reset = evaluate_plain_queries(
@@ -619,6 +685,11 @@ def run_delayed_recall(
             "persistent_dansn_rnn_continuous": wr_continuous,
             "persistent_graph_nodes": wr_model.graph_stats()["nodes"],
             "persistent_memory_paths": wr_model.graph_stats()["memory_nodes"],
+            **({
+                "persistent_entity_linked_reset": linked_reset,
+                "persistent_entity_linked_continuous": linked_continuous,
+                "entity_link_stats": entity_link_stats,
+            } if linked_reset is not None and linked_continuous is not None else {}),
         }
 
     return results
@@ -637,6 +708,11 @@ def aggregate_multi_seed_results(
         "readonly_dansn_gru_reset", "readonly_dansn_gru_continuous",
         "persistent_dansn_rnn_reset", "persistent_dansn_rnn_continuous",
     ]
+    if "persistent_entity_linked_reset" in runs[0]["results"][delays[0]]:
+        metric_keys.extend([
+            "persistent_entity_linked_reset",
+            "persistent_entity_linked_continuous",
+        ])
 
     def summarize(values: Sequence[float]) -> Dict[str, float]:
         mean = sum(values) / len(values)
@@ -664,6 +740,18 @@ def aggregate_multi_seed_results(
         summary[delay]["persistent_memory_paths"] = summarize([
             float(run["results"][delay]["persistent_memory_paths"]) for run in runs
         ])
+        if "entity_link_stats" in runs[0]["results"][delay]:
+            stat_keys = (
+                "observed_first_hop_facts", "observed_second_hop_facts",
+                "cross_links_added", "memory_aliases_added", "unlinked_entities",
+            )
+            summary[delay]["entity_link_stats"] = {
+                key: summarize([
+                    float(run["results"][delay]["entity_link_stats"][key])
+                    for run in runs
+                ])
+                for key in stat_keys
+            }
 
     return {
         "seeds": [int(seed) for seed in seeds],
@@ -699,6 +787,8 @@ def main():
     parser.add_argument("--graph-depth", type=int, default=8)
     parser.add_argument("--chunk-size", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=2e-3)
+    parser.add_argument("--interleave-facts", type=int, default=0,
+                        help="number of unrelated fact pairs inserted between relation-edge groups")
     parser.add_argument("--output", type=Path, default=Path("delayed-recall-results.json"))
     args = parser.parse_args()
     delays = [int(item.strip()) for item in args.delays.split(",") if item.strip()]
@@ -712,6 +802,7 @@ def main():
         graph_depth=args.graph_depth,
         chunk_size=args.chunk_size,
         learning_rate=args.learning_rate,
+        interleave_facts=args.interleave_facts,
     )
     if args.seeds:
         seeds = [int(item.strip()) for item in args.seeds.split(",") if item.strip()]
