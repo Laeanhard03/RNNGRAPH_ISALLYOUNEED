@@ -210,7 +210,12 @@ def run_benchmark(epochs=3, hidden_size=48, chunk_size=8, window_size=8,
         train_read_only_hybrid(readonly, train_ids, readonly_optimizer, chunk_size)
         for _ in range(epochs)
     ]
-    readonly_static = evaluate_prequential(readonly, test_ids, update_graph=False)
+    # Evaluate on a copy so read-only scoring cannot update LRU/access metadata
+    # that would affect the subsequent adaptive run.
+    readonly_static_model = copy.deepcopy(readonly)
+    readonly_static = evaluate_prequential(
+        readonly_static_model, test_ids, update_graph=False
+    )
     readonly_adaptive = train_read_only_hybrid(
         readonly, test_ids, readonly_optimizer, chunk_size
     )
@@ -228,7 +233,12 @@ def run_benchmark(epochs=3, hidden_size=48, chunk_size=8, window_size=8,
         train_stream(coupled, train_ids, coupled_optimizer, chunk_size)
         for _ in range(epochs)
     ]
-    coupled_static = evaluate_prequential(coupled, test_ids, update_graph=False)
+    # Static scoring runs on a full copy, including memory/access metadata,
+    # so the adaptive run starts from the untouched post-training checkpoint.
+    coupled_static_model = copy.deepcopy(coupled)
+    coupled_static = evaluate_prequential(
+        coupled_static_model, test_ids, update_graph=False
+    )
     coupled_adaptive = train_stream(
         coupled, test_ids, coupled_optimizer, chunk_size
     )
