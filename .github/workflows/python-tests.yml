@@ -35,7 +35,7 @@ jobs:
       - name: Compile source
         run: |
           python -m py_compile agi.py recurrent_graph.py persistent_dansn_rnn.py
-          python -m py_compile test_agi.py test_recurrent_graph.py test_persistent_dansn_rnn.py test_delayed_relational_recall.py benchmark_continual_learning.py delayed_relational_recall.py
+          python -m py_compile test_agi.py test_recurrent_graph.py test_persistent_dansn_rnn.py test_delayed_relational_recall.py benchmark_continual_learning.py delayed_relational_recall.py memory_read_supervision.py test_memory_read_supervision.py
       - name: Test canonical DANSN
         run: python test_agi.py
       - name: Test earlier recurrent adapter
@@ -59,4 +59,14 @@ jobs:
         with:
           name: delayed-recall-smoke-result
           path: delayed-recall-ci-results.json
+          if-no-files-found: error
+      - name: Test memory-read supervised learning
+        run: python test_memory_read_supervision.py
+      - name: Smoke-test multi-seed memory-read supervision
+        run: python memory_read_supervision.py --subjects 24 --distractors 24 --delays 0,8,24 --epochs 3 --hidden-size 32 --window-size 9 --graph-depth 8 --chunk-size 16 --seeds 7,13,21 --output memory-read-supervision-ci-results.json
+      - name: Upload memory-read supervision result
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-read-supervision-smoke-result
+          path: memory-read-supervision-ci-results.json
           if-no-files-found: error
