@@ -97,3 +97,26 @@ Measure prequential next-token NLL/perplexity, delayed and multi-hop recall, ret
 The persistent adapter stores per-context memory quality and access metadata. Low-confidence writes are blended less strongly, quality provides a small retrieval prior, and capacity eviction removes the least-recently-used entry (ties favor lower-quality/less-used memories). A zero-confidence write leaves the existing vector unchanged. Checkpoint format v2 stores these metadata fields and still loads v1 checkpoints with default quality values.
 
 Run `python benchmark_continual_learning.py --epochs 3 --seeds 7,13,21` to compare a plain GRU, original DANSN, a read-only DANSN-GRU, and the writable persistent DANSN-RNN on a small synthetic chronological stream. The harness reports both static held-out NLL/perplexity and prequential adaptive NLL/perplexity for all four systems, plus graph candidate coverage. Multi-seed mode summarizes mean and population standard deviation across independent seeds. Static scoring runs on a copy so it cannot mutate memory-access metadata used by the subsequent adaptive run. Static metrics are compared only with static metrics; adaptive metrics compare each system after score-before-update online adaptation. It is a smoke/research comparison, not a benchmark claim; use multiple seeds and larger held-out data before drawing conclusions. The one-seed and three-seed synthetic pilot results are recorded in [BENCHMARK_PILOT_RESULTS.md](BENCHMARK_PILOT_RESULTS.md), including the static/adaptive trade-off and limitations.
+
+
+## Delayed two-hop relational recall experiment
+
+`delayed_relational_recall.py` tests whether the trained recurrent controller can use DANSN's growing graph and persistent context vectors to answer a two-hop lookup after distractors:
+
+```text
+person owns vehicle . vehicle parked place .
+... unrelated facts ...
+where person -> predict place
+```
+
+The training and test knowledge bases use independently randomized person-to-vehicle and vehicle-to-place mappings. Only a subset of subjects receives query supervision during training; the remaining subjects are held out. At test time, a fresh graph absorbs the remapped facts sequentially with neural weights frozen. We evaluate the answer with recurrent state preserved and reset. The read-only hybrid receives the same test facts as graph topology but has no persistent node vectors; the plain GRU receives no external graph.
+
+Run:
+
+```bash
+python test_delayed_relational_recall.py
+python delayed_relational_recall.py --subjects 24 --distractors 48 --delays 0,8,24,48 --epochs 3
+python delayed_relational_recall.py --subjects 24 --distractors 48 --delays 0,8,24,48 --epochs 3 --seeds 7,13,21
+```
+
+Metrics include exact answer accuracy, mean negative log-likelihood, mean reciprocal rank, target reachability within the retrieved graph neighborhood, and whether a persistent-memory path was among retrieved nodes. Static query scoring does not reveal the answer to the model before scoring it. This is a controlled synthetic memory task, not a natural-language benchmark.
