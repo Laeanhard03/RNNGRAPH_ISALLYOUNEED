@@ -199,3 +199,12 @@ The v3 decoder receives three channels: recurrent hidden state, broad graph-neig
 ### V4 associative next-token pointer
 
 The four-gate output now also receives a DANSN next-token distribution over immediate outgoing association edges that carry persistent vectors. Those edge-attention weights are accumulated by child token ID into a vocabulary distribution, then mixed with the neural GRU softmax using the mean effective memory gate. The pointer only exists when a persistent next-edge was stored before the current query target is scored. The same memory gate therefore controls memory fusion into hidden state, the decoder vector skip, and the pointer probability mixture. Checkpoint marker: `dansn_four_gate_gru_v4`.
+
+
+### V4 causal associative recall result
+
+The V4 pointer benchmark completed: [GitHub Actions run 45896936662](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45896936662). The test suite passed **41 tests**. On the balanced three-seed delayed key/value task, full four-gate v4 achieved **100% exact and value-only top-1**, NLL 0.385, mean pointer mix 0.679, and true-target pointer probability 1.0. Query recall also stayed 100% when the recurrent hidden state was reset for each query.
+
+The no-memory-injection ablation fell to 2.78% exact top-1 / 5.56% value-only; no-persistent-write fell to 2.78% exact / 11.1% value-only. This shows persistent writes and the gated memory routes are necessary on this task. The no-graph-evidence ablation also reached 100%, so the explicit graph-evidence features are not needed for this simple setting. The readout-fusion baseline achieved 27.8% value-only top-1.
+
+Important scope: each query had one persistent outgoing answer candidate. This validates one-shot delayed key/value path recall with distractors and hidden-state resets; it does not yet validate ambiguous branching, multi-hop recall, natural language, or semantic idea formation. The v4 model is successful on this controlled mechanism test, but broader capability remains unproven.
