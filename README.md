@@ -24,7 +24,7 @@ Original project scripts:
 
 ## Persistent DANSN-RNN experiment
 
-`persistent_dansn_rnn.py` is a separate experiment implementing a more tightly coupled recurrent loop:
+`persistent_dansn_rnn.py` implements a coupled recurrent loop:
 
 1. The current token and previous GRU state query a bounded DANSN context neighborhood.
 2. DANSN persistent context-path vectors are read using differentiable attention and graph-structure evidence.
@@ -41,20 +41,39 @@ Original project scripts:
 - Only the post-target context node receives the initial write; memory is not broadcast to unrelated nodes.
 - The first version uses a fixed vocabulary. Build the vocabulary before constructing the model or map unseen tokens to an UNK ID.
 - Save the DANSN graph and vocabulary separately with `Brain.save()`; save neural parameters and sparse node memory with `model.save_checkpoint()`. Restore the matching graph/vocabulary before loading the model checkpoint.
-- Model memory is sparse and bounded by a simple FIFO cap. More advanced relevance-based eviction, provenance, contradiction handling, and dynamic vocabulary are future work.
+- Model memory is sparse and bounded by a simple FIFO cap. Smarter relevance-based eviction, provenance, contradiction handling, and dynamic vocabulary are future work.
 - Discrete graph-edge creation is a non-differentiable memory operation. Backpropagation trains the recurrent controller and differentiable query/readout/write modules; graph edges are created after observations.
 - This is a research prototype, not evidence of better language modeling. Lower prequential perplexity is a hypothesis to test, not a guarantee.
 
-### Install and test
+### Run
 
 ```bash
 pip install -r requirements-recurrent.txt
-python test_agi.py
-python test_recurrent_graph.py
+python train_persistent_demo.py
 python test_persistent_dansn_rnn.py
 ```
 
-The persistent experiment tests causal predict-before-write behavior, immediate graph growth, persistent memory retrieval, online parameter updates, prequential evaluation without weight updates, and graph/memory checkpoint round-tripping.
+The demo uses a small synthetic corpus and is only a smoke test. It is not a benchmark. The test suite checks causal predict-before-write behavior, immediate graph growth, persistent memory retrieval, online parameter updates, prequential evaluation without weight updates, checkpoint round-tripping, and unknown-context fallback.
+
+### Persistence and resume
+
+```python
+from agi import Brain
+from persistent_dansn_rnn import PersistentDANSNRNN
+
+brain = Brain.load("vocab.bin", "graph.bin")
+model = PersistentDANSNRNN(
+    brain.engine,
+    vocab_size=len(brain.vocab.word_to_id) + 1,
+    hidden_size=48,
+    window_size=8,
+    graph_depth=3,
+    message_rounds=1,
+)
+model.load_checkpoint("persistent_memory.pt")
+```
+
+Use the same architecture configuration when restoring the model checkpoint. Graph/vocabulary and model/node-memory files are separate artifacts.
 
 ## Evaluation plan
 
@@ -70,4 +89,4 @@ Measure prequential next-token NLL/perplexity, delayed and multi-hop recall, ret
 
 - Original DANSN test suite: 14/14 passed in the earlier development session.
 - Earlier recurrent prototype: 4/4 unit tests passed in the earlier development session.
-- Persistent DANSN-RNN prototype: initial adapter tests are included; task-level benchmarks and superiority claims remain unestablished.
+- Persistent DANSN-RNN adapter tests are included; task-level benchmarks and superiority claims remain unestablished.
