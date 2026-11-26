@@ -185,7 +185,7 @@ The next diagnostic run strengthens the task so all 16 possible output-value cla
 
 ### Four-gate state coupling
 
-The four-gate cell now has a direct DANSN-to-hidden-state path. The reset gate controls both candidate conditioning and how much prior hidden state survives. The memory gate independently blends an attended persistent DANSN vector with the recurrent proposal, rather than placing memory only inside the candidate activation (where update-gate multiplication weakened it). Direct memory retrieval prioritizes stored vectors on outgoing continuations of the matched context, separate from the broad transient graph readout. The current checkpoint marker is `dansn_four_gate_gru_v3`.
+The four-gate cell now has a direct DANSN-to-hidden-state path. The reset gate controls both candidate conditioning and how much prior hidden state survives. The memory gate independently blends an attended persistent DANSN vector with the recurrent proposal, rather than placing memory only inside the candidate activation (where update-gate multiplication weakened it). Direct memory retrieval prioritizes stored vectors on outgoing continuations of the matched context, separate from the broad transient graph readout. The current checkpoint marker is `dansn_four_gate_gru_v4`.
 
 
 The memory-injection gate now starts with bias 0.0 (initial sigmoid near 0.5) rather than -2.0, because the first direct-fusion run learned an effective injection mean of only 0.084. Persistent-write bias remains -2.0 so storage remains conservative. A test guards this initialization. The change is under evaluation; no gain is assumed.
@@ -193,4 +193,9 @@ The memory-injection gate now starts with bias 0.0 (initial sigmoid near 0.5) ra
 
 ### Joint recurrent–associative output
 
-The v3 decoder receives three channels: recurrent hidden state, broad graph-neighborhood readout, and the same memory-gated persistent-vector readout that participates in hidden-state fusion. The memory gate therefore influences both the next recurrent state and the output decoder. The no-memory-injection ablation zeros both routes. Checkpoint marker: `dansn_four_gate_gru_v3`.
+The v3 decoder receives three channels: recurrent hidden state, broad graph-neighborhood readout, and the same memory-gated persistent-vector readout that participates in hidden-state fusion. The memory gate therefore influences both the next recurrent state and the output decoder. The no-memory-injection ablation zeros both routes. Checkpoint marker: `dansn_four_gate_gru_v4`.
+
+
+### V4 associative next-token pointer
+
+The four-gate output now also receives a DANSN next-token distribution over immediate outgoing association edges that carry persistent vectors. Those edge-attention weights are accumulated by child token ID into a vocabulary distribution, then mixed with the neural GRU softmax using the mean effective memory gate. The pointer only exists when a persistent next-edge was stored before the current query target is scored. The same memory gate therefore controls memory fusion into hidden state, the decoder vector skip, and the pointer probability mixture. Checkpoint marker: `dansn_four_gate_gru_v4`.
