@@ -514,9 +514,6 @@ def evaluate_model(
         mixed_target_probs.append(float(probabilities[target].cpu()))
 
         pointer = trace["persistent_token_distribution"]
-        query_states_by_key.setdefault(int(query.key_id), {})[
-            int(query.cue_id)
-        ] = trace["previous_hidden"].detach().clone()
         candidate_ids = trace["pointer_candidate_ids"]
         candidate_scores = trace["pointer_scores"]
         target_positions = torch.nonzero(
@@ -582,7 +579,27 @@ def evaluate_model(
 
     cue_state_cosines: list[float] = []
     cue_state_distances: list[float] = []
-    for cue_states in query_states_by_key.values():
+    # Compare different cues for each key while holding the distractor sequence
+    # fixed. This isolates cue encoding from nuisance variation in noise tokens.
+    for key_id in sorted({int(query.key_id) for query in dataset.queries}):
+        reference_query = next(
+            query for query in dataset.queries if int(query.key_id) == key_id
+        )
+        cue_states: dict[int, torch.Tensor] = {}
+        key_cues = sorted({
+            int(cue_id)
+            for cue_id, support_key, _value in dataset.test_supports
+            if int(support_key) == key_id
+        })
+        for cue_id in key_cues:
+            _cue_logits, _cue_history, cue_trace = _run_query(
+                model,
+                dataset,
+                cue_id,
+                key_id,
+                reference_query.distractor_ids,
+            )
+            cue_states[cue_id] = cue_trace["previous_hidden"].detach().clone()
         ordered_states = [
             cue_states[cue_id] for cue_id in sorted(cue_states)
         ]
