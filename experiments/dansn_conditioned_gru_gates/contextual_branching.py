@@ -282,7 +282,6 @@ def _run_query(
     return logits, history, trace
 
 
-@torch.no_grad()
 def train_contextual_stream(
     model: DANSNFourGateGRU,
     dataset: ContextualBranchDataset,
