@@ -288,3 +288,12 @@ The present bottleneck is candidate scoring, not graph storage or candidate disc
 Next proposed change: add explicit pointer-candidate ranking supervision during training query steps, only when the correct target is already among the stored direct candidates. Score the target before calling observe_target(); apply an auxiliary negative-log-probability loss to the pointer distribution, then continue with the existing causal post-score write. This tests whether the existing recurrent query can learn to rank branches before introducing a larger additive-attention scorer. Keep no-pointer as a control that receives the same selector training but suppresses only pointer mixing at inference. Preserve the no-memory, no-write, no-graph-evidence, and reset-state comparisons.
 
 The result remains a synthetic 3-branch experiment, not evidence of natural-language or general semantic reasoning. The matched-delay artifact is GitHub Actions artifact ID 15164135696 (dansn-contextual-branch-results).
+
+
+## Auxiliary pointer-ranking trainer — validation status — 2026-11-27
+
+The contextual benchmark now includes an auxiliary ranking objective at marked training query positions. It applies \`-log(pointer[target])\` only if the correct target is already represented among the direct persistent candidates. The usual vocabulary next-token loss is retained. Both losses are computed before \`observe_target()\`; the target is revealed and written only after scoring. The same selector supervision is used for all eligible ablations, while \`no_pointer\` disables only the pointer output mixture at inference.
+
+A new training-position test checks that the supervised current token is the key and the next token is its stored target. A gradient test checks that selector training updates the query projection. The first CI attempt found that the trainer accidentally inherited an evaluation-only \`no_grad\` decorator. This was corrected in commit \`cc03c3b870ecf30e39c7ec483bdf9b4d83175cc4\`.
+
+Corrected Actions run [45919882859](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45919882859) has passed dependency installation and the complete experiment test step. Its three-seed benchmark is still running; no performance improvement is claimed yet.
