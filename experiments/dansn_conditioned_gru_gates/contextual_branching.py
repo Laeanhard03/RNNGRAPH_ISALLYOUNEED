@@ -44,6 +44,7 @@ class ContextualBranchDataset:
     brain: Brain
     train_tokens: list[int]
     train_query_positions: frozenset[int]
+    train_records: list[list[tuple[int, tuple[int, ...], int, bool]]]
     test_supports: list[tuple[int, int, int]]
     queries: list[BranchQuery]
     context_id: int
@@ -124,6 +125,24 @@ def generate_dataset(
 
     train_tokens: list[int] = []
     train_query_positions: set[int] = set()
+    train_records: list[list[tuple[int, tuple[int, ...], int, bool]]] = []
+
+    def add_record(events: list[tuple[int, tuple[int, ...], int, bool]]) -> None:
+        """Append an independent recurrent episode and its causal token stream."""
+        if not events:
+            return
+        offset = len(train_tokens)
+        # Each event's target is exactly the next event's input. Store one
+        # initial input followed by the revealed targets, without duplication.
+        train_tokens.append(int(events[0][0]))
+        for event_index, (token_id, _graph_history, target_id, supervise) in enumerate(events):
+            if int(token_id) != int(train_tokens[offset + event_index]):
+                raise RuntimeError("training record is not next-token aligned")
+            if supervise:
+                train_query_positions.add(offset + event_index)
+            train_tokens.append(int(target_id))
+        train_records.append(events)
+
     for _episode in range(train_episodes):
         support_rows = [
             (cue_id, key_id, train_mapping[(key_id, cue_id)])
@@ -132,25 +151,45 @@ def generate_dataset(
         ]
         rng.shuffle(support_rows)
         for cue_id, key_id, target_id in support_rows:
-            # All cue branches share the same DANSN parent path (context,key).
-            train_tokens.extend((cue_id, context_id, key_id, target_id))
+            # Cue enters recurrent state, but DANSN sees a separate shared
+            # key path. All cue-conditioned values therefore share (context,key).
+            add_record([
+                (cue_id, (cue_id,), context_id, False),
+                (context_id, (context_id,), key_id, False),
+                (key_id, (context_id, key_id), target_id, False),
+            ])
 
         query_rows = list(support_rows)
         rng.shuffle(query_rows)
         for cue_id, key_id, target_id in query_rows:
             delay = rng.randint(0, train_delay)
-            train_tokens.append(cue_id)
-            train_tokens.extend(rng.choice(noise_ids) for _ in range(delay))
-            train_tokens.extend((context_id, key_id, target_id))
-            # The current-token index for the key is the supervised branch
-            # selection step; its next token is the associated value.
-            train_query_positions.add(len(train_tokens) - 2)
+            distractors = [rng.choice(noise_ids) for _ in range(delay)]
+            query_inputs = [cue_id, *distractors, context_id, key_id]
+            graph_histories = [
+                (token_id,) for token_id in [cue_id, *distractors, context_id]
+            ] + [(context_id, key_id)]
+            query_targets = [*distractors, context_id, key_id, target_id]
+            events = [
+                (
+                    int(token_id),
+                    tuple(int(x) for x in graph_history),
+                    int(next_token),
+                    event_index == len(query_inputs) - 1,
+                )
+                for event_index, (token_id, graph_history, next_token) in enumerate(
+                    zip(query_inputs, graph_histories, query_targets)
+                )
+            ]
+            add_record(events)
 
         # Expose held-out key embeddings without exposing their branch relation.
         exposure_rows = list(heldout_key_ids)
         rng.shuffle(exposure_rows)
         for key_id in exposure_rows:
-            train_tokens.extend((vocab["noiseleft"], key_id, vocab["noiseright"]))
+            add_record([
+                (vocab["noiseleft"], (vocab["noiseleft"],), key_id, False),
+                (key_id, (key_id,), vocab["noiseright"], False),
+            ])
 
     test_supports = [
         (cue_id, key_id, heldout_mapping[(key_id, cue_id)])
@@ -197,6 +236,8 @@ def generate_dataset(
         "test_delay_is_within_training_range": int(test_delay) <= int(train_delay),
         "train_token_count": len(train_tokens),
         "train_query_supervision_positions": len(train_query_positions),
+        "training_records": len(train_records),
+        "graph_context_separated_from_recurrent_cue": True,
         "heldout_support_count": len(test_supports),
         "heldout_query_count": len(queries),
         "candidate_branches_per_key": int(cue_count),
@@ -222,6 +263,7 @@ def generate_dataset(
         brain=brain,
         train_tokens=train_tokens,
         train_query_positions=frozenset(train_query_positions),
+        train_records=train_records,
         test_supports=test_supports,
         queries=queries,
         context_id=context_id,
@@ -238,16 +280,20 @@ def ingest_heldout_supports(
     """Score each support target from its cue/context, then write it to DANSN."""
     written = 0
     for cue_id, key_id, target_id in dataset.test_supports:
-        history: list[int] = []
         state = model.initial_state()
-        for token_id in (cue_id, dataset.context_id, key_id):
-            history.append(int(token_id))
+        # Cue is recurrent context only. DANSN's key path is intentionally
+        # identical for all cue branches: (context,key).
+        for token_id, graph_history in (
+            (cue_id, (cue_id,)),
+            (dataset.context_id, (dataset.context_id,)),
+            (key_id, (dataset.context_id, key_id)),
+        ):
             _logits, state, _trace = model.forward_step(
-                int(token_id), history, state
+                int(token_id), graph_history, state
             )
         expected_path = (dataset.context_id, key_id, target_id)
-        # The target is first revealed here, after the key prediction step.
-        model.observe_target(history, target_id, state)
+        # Target is revealed only after the key prediction is scored.
+        model.observe_target((dataset.context_id, key_id), target_id, state)
         written += int(expected_path in model.node_memory)
     return {
         "support_count": len(dataset.test_supports),
@@ -266,20 +312,23 @@ def _run_query(
     key_id: int,
     distractor_ids: Sequence[int],
 ):
-    history: list[int] = []
     state = model.initial_state()
     logits = None
     trace = None
-    # Recurrent state starts empty for each query, then must carry its cue
-    # through distractors and the shared context token into the key lookup.
-    for token_id in (cue_id, *distractor_ids, dataset.context_id, key_id):
-        history.append(int(token_id))
+    # Recurrent state sees the full cue/distractor sequence. DANSN history is
+    # intentionally separate and ends at the shared (context,key) parent.
+    for token_id, graph_history in [
+        (cue_id, (cue_id,)),
+        *[(int(token), (int(token),)) for token in distractor_ids],
+        (dataset.context_id, (dataset.context_id,)),
+        (key_id, (dataset.context_id, key_id)),
+    ]:
         logits, state, trace = model.forward_step(
-            int(token_id), history, state
+            int(token_id), graph_history, state
         )
     if logits is None or trace is None:
         raise RuntimeError("query contained no input tokens")
-    return logits, history, trace
+    return logits, (dataset.context_id, key_id), trace
 
 
 def train_contextual_stream(
@@ -291,84 +340,79 @@ def train_contextual_stream(
     grad_clip: float = 1.0,
     pointer_loss_weight: float = 1.0,
 ) -> dict:
-    """Train causally with auxiliary ranking loss on stored query candidates.
+    """Train on independent cue episodes with shared DANSN key paths.
 
-    A selector loss is applied only at marked training query positions and only
-    when the correct target is already present in the persistent pointer
-    distribution. The target is scored before observe_target() reveals it.
+    The cue and distractors update the recurrent state, but each event supplies
+    a separate DANSN graph-history key. At query key positions, all previously
+    written alternatives share the same (context,key) parent, allowing the
+    auxiliary pointer loss to rank among the already stored continuations.
     """
     if chunk_size < 1:
         raise ValueError("chunk_size must be >= 1")
     if pointer_loss_weight < 0:
         raise ValueError("pointer_loss_weight must be non-negative")
-    token_ids = dataset.train_tokens
-    if len(token_ids) < 2:
-        return {
-            "mean_loss": 0.0,
-            "mean_nll": 0.0,
-            "mean_pointer_loss": 0.0,
-            "pointer_supervision_examples": 0.0,
-            "tokens": 0.0,
-            "updates": 0.0,
-        }
+    model._validate_ids(dataset.train_tokens)
 
-    model._validate_ids(token_ids)
-    state = model.initial_state()
-    history = [int(token_ids[0])]
     chunk_losses = []
     observed_nll = []
     observed_pointer_losses = []
     combined_losses = []
     pointer_supervision_examples = 0
+    pointer_candidate_counts = []
     updates = 0
     model.train()
     optimizer.zero_grad(set_to_none=True)
 
-    for index, raw_token in enumerate(token_ids[:-1]):
-        token = int(raw_token)
-        target = int(token_ids[index + 1])
-        if history[-1] != token:
-            raise RuntimeError("stream history lost causal alignment")
+    total_events = sum(len(record) for record in dataset.train_records)
+    event_index = 0
+    for record in dataset.train_records:
+        state = model.initial_state()
+        for token, graph_history, target, supervise_pointer in record:
+            logits, state, trace = model.forward_step(
+                int(token), graph_history, state
+            )
+            target_tensor = torch.tensor(
+                [int(target)], dtype=torch.long, device=model.device
+            )
+            nll_loss = F.cross_entropy(logits.unsqueeze(0), target_tensor)
+            selector_loss = logits.new_zeros(())
 
-        logits, state, trace = model.forward_step(token, history, state)
-        target_tensor = torch.tensor(
-            [target], dtype=torch.long, device=model.device
-        )
-        nll_loss = F.cross_entropy(logits.unsqueeze(0), target_tensor)
-        selector_loss = logits.new_zeros(())
+            if supervise_pointer:
+                pointer = trace["persistent_token_distribution"]
+                candidate_count = int(torch.count_nonzero(pointer).item())
+                pointer_candidate_counts.append(float(candidate_count))
+                target_probability = pointer[int(target)]
+                if candidate_count > 0 and float(
+                    target_probability.detach().cpu()
+                ) > 0.0:
+                    selector_loss = -torch.log(
+                        target_probability.clamp_min(1e-9)
+                    )
+                    observed_pointer_losses.append(
+                        float(selector_loss.detach().cpu())
+                    )
+                    pointer_supervision_examples += 1
 
-        if index in dataset.train_query_positions and trace.get("pointer_available", False):
-            pointer = trace["persistent_token_distribution"]
-            target_pointer_probability = pointer[target]
-            if float(target_pointer_probability.detach().cpu()) > 0.0:
-                selector_loss = -torch.log(
-                    target_pointer_probability.clamp_min(1e-9)
-                )
-                observed_pointer_losses.append(
-                    float(selector_loss.detach().cpu())
-                )
-                pointer_supervision_examples += 1
+            combined_loss = nll_loss + pointer_loss_weight * selector_loss
+            chunk_losses.append(combined_loss)
+            observed_nll.append(float(nll_loss.detach().cpu()))
+            combined_losses.append(float(combined_loss.detach().cpu()))
 
-        combined_loss = nll_loss + pointer_loss_weight * selector_loss
-        chunk_losses.append(combined_loss)
-        observed_nll.append(float(nll_loss.detach().cpu()))
-        combined_losses.append(float(combined_loss.detach().cpu()))
+            # Both ordinary next-token loss and candidate-ranking loss are
+            # computed before the target is revealed to persistent DANSN memory.
+            model.observe_target(graph_history, int(target), state)
+            event_index += 1
 
-        # The prediction and optional candidate-ranking losses are both
-        # evaluated before the target is revealed to DANSN.
-        model.observe_target(history, target, state)
-        history.append(target)
-
-        if len(chunk_losses) >= chunk_size or index == len(token_ids) - 2:
-            torch.stack(chunk_losses).mean().backward()
-            if grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-            state = state.detached()
-            model.detach_memory()
-            chunk_losses.clear()
-            updates += 1
+            if len(chunk_losses) >= chunk_size or event_index == total_events:
+                torch.stack(chunk_losses).mean().backward()
+                if grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                state = state.detached()
+                model.detach_memory()
+                chunk_losses.clear()
+                updates += 1
 
     return {
         "mean_loss": sum(observed_nll) / max(len(observed_nll), 1),
@@ -379,9 +423,14 @@ def train_contextual_stream(
             if observed_pointer_losses else 0.0
         ),
         "pointer_supervision_examples": float(pointer_supervision_examples),
+        "mean_training_pointer_candidates": (
+            sum(pointer_candidate_counts) / len(pointer_candidate_counts)
+            if pointer_candidate_counts else 0.0
+        ),
         "tokens": float(len(observed_nll)),
         "updates": float(updates),
     }
+
 
 
 @torch.no_grad()
@@ -586,6 +635,7 @@ def run_one_seed(
             "last_train_mean_loss": train_metrics[-1]["mean_nll"],
             "last_train_mean_pointer_loss": train_metrics[-1]["mean_pointer_loss"],
             "last_train_pointer_supervision_examples": train_metrics[-1]["pointer_supervision_examples"],
+            "last_train_mean_pointer_candidates": train_metrics[-1]["mean_training_pointer_candidates"],
         }
 
     return {
@@ -635,6 +685,7 @@ def run_benchmark(
         "last_train_mean_loss",
         "last_train_mean_pointer_loss",
         "last_train_pointer_supervision_examples",
+        "last_train_mean_pointer_candidates",
         "parameter_count",
     )
     summary = {}
@@ -715,6 +766,18 @@ def _dataset_payload(dataset: ContextualBranchDataset) -> dict:
         "metadata": dataset.metadata,
         "train_tokens": dataset.train_tokens,
         "train_query_positions": sorted(dataset.train_query_positions),
+        "train_records": [
+            [
+                {
+                    "token_id": token,
+                    "graph_history": list(graph_history),
+                    "target_id": target,
+                    "supervise_pointer": supervise,
+                }
+                for token, graph_history, target, supervise in record
+            ]
+            for record in dataset.train_records
+        ],
         "heldout_supports": [
             {"cue_id": cue, "key_id": key, "target_id": target}
             for cue, key, target in dataset.test_supports
