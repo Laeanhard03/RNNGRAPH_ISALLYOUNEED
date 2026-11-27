@@ -222,6 +222,15 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         del self.gate_cell
         del self.write_gate
         self.four_gate_cell = DANSNFourGateCell(hidden_size)
+        # Nonlinear pairwise selector. The query is conditioned on the
+        # recurrent state; the candidate key contains its token embedding and
+        # persistent path state. Explicit product features let the scorer learn
+        # cue/candidate interactions instead of relying on a single dot product.
+        self.pointer_scorer = nn.Sequential(
+            nn.Linear(3 * hidden_size, hidden_size),
+            nn.Tanh(),
+            nn.Linear(hidden_size, 1, bias=False),
+        )
         # The decoder sees the recurrent state, broad graph context, and a
         # separate gated persistent-memory channel. This prevents the final
         # prediction head from having to recover all associative information
@@ -284,7 +293,7 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         previous_hidden: Tensor,
         matched_path,
         active_paths: Sequence[tuple[int, ...]],
-    ) -> tuple[Tensor, list[tuple[int, ...]], Tensor, bool]:
+    ) -> tuple[Tensor, list[tuple[int, ...]], Tensor, bool, Tensor, Tensor]:
         """Read persistent vectors and build a direct next-token pointer.
 
         The broad graph readout performs transient message passing over a
@@ -297,7 +306,9 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         zero = token_embedding.new_zeros(self.hidden_size)
         pointer = token_embedding.new_zeros(self.embedding.num_embeddings)
         if not active_paths:
-            return zero, [], pointer, False
+            empty = token_embedding.new_zeros(0)
+            empty_ids = torch.empty(0, dtype=torch.long, device=self.device)
+            return zero, [], pointer, False, empty, empty_ids
 
         direct_candidates: list[tuple[int, ...]] = []
         if matched_path is not None:
@@ -312,7 +323,9 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             path for path in active_paths if path in self.node_memory
         ]
         if not candidates:
-            return zero, [], pointer, False
+            empty = token_embedding.new_zeros(0)
+            empty_ids = torch.empty(0, dtype=torch.long, device=self.device)
+            return zero, [], pointer, False, empty, empty_ids
 
         query = self.query_projection(
             torch.cat((token_embedding, previous_hidden), dim=-1)
@@ -341,10 +354,11 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
                 math.log1p(frequency) * self.structural_bias
                 + math.log(quality)
             )
-            scores.append(
-                torch.dot(keys[-1], query) / math.sqrt(self.hidden_size)
-                + query.new_tensor(prior)
+            pair_features = torch.cat(
+                (query, keys[-1], query * keys[-1]), dim=-1
             )
+            learned_score = self.pointer_scorer(pair_features).squeeze(-1)
+            scores.append(learned_score + query.new_tensor(prior))
             self._touch_memory(path)
 
         weights = torch.softmax(torch.stack(scores), dim=0)
@@ -360,7 +374,12 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
                 device=self.device,
             )
             pointer = pointer.scatter_add(0, candidate_ids, weights)
-        return retrieved, candidates, pointer, pointer_available
+        else:
+            candidate_ids = torch.empty(0, dtype=torch.long, device=self.device)
+        return (
+            retrieved, candidates, pointer, pointer_available,
+            torch.stack(scores), candidate_ids,
+        )
 
     def forward_step(
         self,
@@ -388,6 +407,8 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             persistent_paths,
             persistent_token_distribution,
             pointer_available,
+            pointer_scores,
+            pointer_candidate_ids,
         ) = self._read_persistent_memory(
             token_embedding, previous_hidden, matched_path, active_paths
         )
@@ -441,6 +462,12 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             "memory_output_context": memory_output_context,
             "neural_probabilities": neural_probabilities,
             "persistent_token_distribution": persistent_token_distribution,
+            "pointer_scores": pointer_scores,
+            "pointer_candidate_ids": pointer_candidate_ids,
+            "pointer_query": self.query_projection(
+                torch.cat((token_embedding, previous_hidden), dim=-1)
+            ),
+            "previous_hidden": previous_hidden,
             "effective_pointer_mix": pointer_mix,
             "pointer_available": pointer_available,
             "pointer_enabled": pointer_enabled,
