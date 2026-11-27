@@ -259,3 +259,32 @@ The first benchmark trained with distractor gaps up to 3 tokens but evaluated at
 The script's default maximum training delay has now been changed to 8 tokens, matching the evaluation delay. Dataset metadata records whether the test delay is inside the training range, and a regression test protects the default. The model architecture and ablation definitions are unchanged. The matched-delay rerun is [Actions run 45918540578](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45918540578); a duplicate run at the latest test commit is [Actions run 45918553271](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45918553271). Results are pending at the time of this edit.
 
 The expanded test suite passed **46 tests, 1 warning in 3.95s**. Do not interpret the first run as a definitive architecture failure until the matched-delay benchmark completes. Even a successful matched-delay result would remain a synthetic three-branch task, not evidence of general language or semantic reasoning.
+
+
+## Matched-delay branch-selection result — 2026-11-27
+
+The corrected three-seed benchmark completed successfully in [Actions run 45918553271](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45918553271), with artifact ID 15164135696. The expanded experiment suite passed **46 tests, 1 warning in 3.95s**. The corrected training and evaluation delays are both 8 tokens (training delay range 0–8, query delay 8), and metadata confirms that the evaluation delay is within the training range.
+
+Configuration: 16 train keys, 8 held-out keys, 3 cue-conditioned branches per key, 12 value classes, 4 training episodes, 4 epochs, seeds 7/13/21, 24 held-out queries per seed (72 total). Every query has exactly three stored candidates; query target is not in the input; the recurrent state is reset at each query while DANSN graph and persistent vectors remain.
+
+| Three-seed mean | Full V4 | No pointer | No memory injection | No persistent write | No graph evidence |
+|---|---:|---:|---:|---:|---:|
+| Output top-1 | 33.33% | 11.11% | 20.83% | 8.33% | 33.33% |
+| Value-only top-1 | 33.33% | 16.67% | 20.83% | 8.33% | 33.33% |
+| Raw pointer top-1 | 36.11% | 34.72% | 33.33% | 0% | 33.33% |
+| Counterfactual cue selection | 31.94% | 30.56% | 33.33% | 0% | 33.33% |
+| Pointer top-1 with hidden state reset | 33.33% | 33.33% | 33.33% | 0% | 33.33% |
+
+Full V4 detailed measurements: pointer target probability 0.32935 (uniform chance 0.33333); mixed target probability 0.24428; mean candidate count 3.0; branch entropy 1.0163 (maximum ln(3)=1.0986); persistent vector write and query coverage 100%; effective memory/pointer mix 0.7022; reset-state pointer accuracy 33.33%; context pointer gain -0.00399.
+
+Interpretation: even after matching train/test delay, output top-1 remains at three-way chance. Raw pointer top-1 is 36.11%, only slightly above chance and not accompanied by counterfactual cue switching (31.94%) or a benefit from carried recurrent state (reset-state pointer accuracy 33.33%; context pointer gain slightly negative). Thus this experiment **does not demonstrate reliable cue-conditioned branch selection or recurrent-state contribution**. It does demonstrate successful storage and candidate discovery: all three branches are written and retrieved for every key/query.
+
+The no-pointer ablation retains memory-to-hidden and decoder-vector paths but obtains only 11.11% output top-1. No-graph-evidence matches full output accuracy, so graph-evidence features have not demonstrated an independent benefit in this task. No-persistent-write has zero stored candidates and zero pointer coverage, as expected.
+
+### Selector diagnosis and next experiment
+
+The present bottleneck is candidate scoring, not graph storage or candidate discovery. The existing persistent read scores each candidate using a dot product between a query projected from [token embedding; previous hidden] and a key projected from [child embedding; stored vector], plus structural priors. But the scores remain close to uniform, suggesting the controller's recurrent cue representation is not being exploited by this selector.
+
+Next proposed change: add explicit pointer-candidate ranking supervision during training query steps, only when the correct target is already among the stored direct candidates. Score the target before calling observe_target(); apply an auxiliary negative-log-probability loss to the pointer distribution, then continue with the existing causal post-score write. This tests whether the existing recurrent query can learn to rank branches before introducing a larger additive-attention scorer. Keep no-pointer as a control that receives the same selector training but suppresses only pointer mixing at inference. Preserve the no-memory, no-write, no-graph-evidence, and reset-state comparisons.
+
+The result remains a synthetic 3-branch experiment, not evidence of natural-language or general semantic reasoning. The matched-delay artifact is GitHub Actions artifact ID 15164135696 (dansn-contextual-branch-results).
