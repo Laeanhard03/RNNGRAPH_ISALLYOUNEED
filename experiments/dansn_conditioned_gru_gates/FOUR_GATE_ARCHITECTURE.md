@@ -408,3 +408,45 @@ Commits:
 - checkpoint regression test: `d860b6d99077e6c79ebc7921126f13d4c3a2bcfd`
 
 The latest complete code/test revision is being validated by [GitHub Actions run 45987516539](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45987516539). Earlier runs on the scorer implementation passed the nonlinear scorer's gradient and cue-sensitivity tests; the benchmark stage is still running. Do not claim a recall improvement until the artifact shows above-chance pointer/counterfactual selection and a positive target-score margin.
+
+
+## Nonlinear-selector v5 benchmark result — 2026-11-27
+
+The nonlinear pairwise candidate scorer and matched-distractor cue-state diagnostics completed in [GitHub Actions run 45987516539](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45987516539), artifact 15192741969. The associative-recall run [45987516611](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45987516611), artifact 15193165432, and broad core/corpus test workflow [45987516691](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45987516691) also completed successfully. The v5 contextual and recall tests passed.
+
+### Context-dependent three-branch task: still at chance
+
+The matched-delay, three-seed task uses 16 train keys, 8 held-out keys, 3 cue-conditioned values per key, 12 value classes, 4 support episodes, train/test delay 8, and 24 held-out queries per seed. At every supervised query, the correct answer is already one of exactly 3 stored candidates; there are 192 supervised selector examples per seed. Query targets remain hidden until after scoring.
+
+| Three-seed mean, full v5 | Result |
+|---|---:|
+| Output top-1 | 33.33% |
+| Pointer top-1 | 33.33% |
+| Counterfactual cue selection | 33.33% |
+| Pointer top-1 after hidden-state reset | 33.33% |
+| Pointer target probability | 0.333329 |
+| Target score margin vs strongest competitor | -0.08175 |
+| Candidate branch entropy | 1.0920 (maximum ln(3) = 1.0986) |
+| Persistent vector write/query coverage | 100% / 100% |
+| Candidate count per query | 3 |
+| Selector loss | 1.10356 (uniform three-way NLL = 1.09861) |
+
+The no-graph-evidence ablation also remains at three-way chance. The no-pointer and no-memory-injection controls have lower output accuracy (8.33% and 13.89% respectively), but this does not establish cue-conditioned choice: the full model's pointer remains uniform and its counterfactual result is chance. The no-write condition has zero candidate coverage, as expected.
+
+### Cue-state collapse is the strongest new diagnostic
+
+When each held-out cue is replayed with the same key and exactly matched distractor sequence, the full model's recurrent query states have mean cosine similarity **0.99999999** and mean L2 distance **0.0001265** across different cues. Thus, the states are almost indistinguishable by the time the shared key is scored. The target candidate's raw score margin is negative on average, and pointer entropy remains close to the uniform maximum.
+
+This localizes the current failure upstream of the nonlinear candidate scorer: the scorer receives almost no separable cue signal in the recurrent query state at the decision point. A remaining hypothesis is that repeated recurrent/memory fusion during the cue-and-distractor sequence washes out cue information; the benchmark establishes state collapse, but does not yet isolate which transition or gate causes it. The mean effective memory mix at query is 0.9776 (the bounded hidden-state blend uses half of this coefficient), so time-resolved gate/state traces are needed before attributing causality to the memory gate.
+
+### Single-association delayed recall: strong positive result, narrower scope
+
+The v5 four-gate model retains **100% exact top-1 and value-only top-1** across all three seeds on the held-out one-shot key/value association task, including the per-query hidden-state-reset diagnostic. Mean target-value probability is 0.9395 and mean query NLL is 0.3348. In this task each query has only **one** persistent answer candidate; it tests reliable storage and delayed retrieval, not selection among competing continuations.
+
+The plain GRU and readout-fusion / three-path recurrent baselines obtain 0% exact top-1. Disabling memory injection reduces four-gate exact top-1 to 2.78%; disabling persistent writes reduces it to 0%. These controls support the conclusion that the DANSN persistent memory routes are doing useful work for single-association recall. The no-graph-evidence ablation also remains at 100% on this simple task, so independent benefit from the graph-evidence controller features is not demonstrated here.
+
+### Next engineering target
+
+Do not add more scorer complexity yet. First preserve and expose a cue-bearing controller state across the distractor interval, separately from the DANSN memory-fusion path. Add time-resolved traces/probes for cue representation before and after each distractor, context token, and key; compare the current cell with a protected recurrent carry or delayed/conditional memory injection. Keep the graph parent shared across branches, three candidates, score-before-write order, matched distractors, reset/counterfactual diagnostics, and all storage/read/write ablations unchanged. The acceptance criterion is repeatable above-chance pointer and counterfactual cue selection across seeds, with a positive target score margin and a measurable drop when the cue-bearing recurrent state is removed.
+
+The experiment remains on `feature/dg-gru-four-gate-control`. The branch is 136 commits ahead and 0 behind `main`; canonical `agi.py` remains byte-identical by blob SHA (`4abc472fd62e3d2807dc9709894d9cb9ca6d12dc`). No merge was made.
