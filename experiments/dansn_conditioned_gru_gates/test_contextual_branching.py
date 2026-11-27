@@ -90,6 +90,7 @@ def test_same_key_exposes_multiple_persistent_pointer_candidates():
     model = _make_model(dataset)
     support = ingest_heldout_supports(model, dataset)
     assert support["persistent_vector_write_coverage"] == 1.0
+    assert dataset.metadata["graph_context_separated_from_recurrent_cue"] is True
 
     query = dataset.queries[0]
     logits, _history, trace = _run_query(
@@ -179,7 +180,50 @@ def test_auxiliary_pointer_loss_trains_only_stored_query_candidates():
         pointer_loss_weight=1.0,
     )
 
-    assert metrics["pointer_supervision_examples"] > 0
+    assert metrics["pointer_supervision_examples"] == len(
+        dataset.train_query_positions
+    )
+    assert metrics["mean_training_pointer_candidates"] == 3.0
     assert metrics["mean_pointer_loss"] > 0.0
     assert torch.isfinite(torch.tensor(metrics["mean_pointer_loss"]))
     assert not torch.allclose(before, model.query_projection.weight.detach())
+
+
+def test_cue_is_recurrent_context_but_does_not_split_dansn_candidate_parent():
+    torch.manual_seed(241)
+    dataset = generate_dataset(
+        seed=241,
+        train_keys=6,
+        heldout_keys=2,
+        cue_count=3,
+        value_count=8,
+        train_episodes=1,
+        train_delay=2,
+        test_delay=3,
+    )
+    model = _make_model(dataset)
+    ingest_heldout_supports(model, dataset)
+
+    key_id = dataset.queries[0].key_id
+    stored_values = {
+        value_id
+        for _cue, support_key, value_id in dataset.test_supports
+        if support_key == key_id
+    }
+    assert len(stored_values) == 3
+    assert all(
+        (dataset.context_id, key_id, value_id) in model.node_memory
+        for value_id in stored_values
+    )
+
+    query_a = next(q for q in dataset.queries if q.key_id == key_id)
+    _logits, _history, trace = _run_query(
+        model,
+        dataset,
+        query_a.cue_id,
+        key_id,
+        query_a.distractor_ids,
+    )
+    assert torch.count_nonzero(
+        trace["persistent_token_distribution"]
+    ).item() == 3
