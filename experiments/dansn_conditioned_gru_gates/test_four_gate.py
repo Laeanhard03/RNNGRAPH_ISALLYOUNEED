@@ -623,3 +623,35 @@ def test_query_loss_trains_memory_gate_through_pointer_probability_mix():
     assert memory_gate_grad is not None
     assert torch.isfinite(memory_gate_grad).all()
     assert torch.linalg.vector_norm(memory_gate_grad).item() > 0.0
+
+
+def test_no_pointer_ablation_preserves_memory_fusion_and_decoder_skip():
+    """Pointer copy can be removed without disabling DANSN-to-state fusion."""
+    torch.manual_seed(109)
+    brain = Brain()
+    ctx, key, value = brain.vocab.tokenize(
+        "recallctx keyalpha valueomega"
+    )
+    model = make_model(brain, gate_ablation="no_pointer")
+    with torch.no_grad():
+        model.four_gate_cell.controller.weight.zero_()
+        model.four_gate_cell.controller.bias.zero_()
+        model.four_gate_cell.controller.bias[3 * model.hidden_size:].fill_(20.0)
+
+    _, support_state, _ = model.forward_step(key, [ctx, key])
+    support_state.write_gate = torch.ones_like(support_state.write_gate)
+    model.observe_target([ctx, key], value, support_state)
+
+    logits, _state, trace = model.forward_step(
+        key, [ctx, key], model.initial_state()
+    )
+    assert trace["pointer_available"] is True
+    assert trace["pointer_enabled"] is False
+    assert trace["persistent_token_distribution"][value].item() == 1.0
+    assert trace["effective_pointer_mix"].item() == 0.0
+    assert trace["effective_memory_mix"].mean().item() > 0.0
+    assert torch.linalg.vector_norm(trace["memory_output_context"]).item() > 0.0
+    assert torch.allclose(
+        logits,
+        torch.log(trace["neural_probabilities"].clamp_min(1e-9)),
+    )
