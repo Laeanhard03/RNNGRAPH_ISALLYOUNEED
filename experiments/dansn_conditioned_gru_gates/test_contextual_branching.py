@@ -8,6 +8,7 @@ from experiments.dansn_conditioned_gru_gates.contextual_branching import (
     _run_query,
     generate_dataset,
     ingest_heldout_supports,
+    _normalized_contextual_objective,
 )
 from experiments.dansn_conditioned_gru_gates.four_gate import DANSNFourGateGRU
 
@@ -281,3 +282,28 @@ def test_heldout_support_ingestion_writes_shared_parent_memory():
     for cue_id, support_key, value_id in dataset.test_supports:
         if support_key == key_id:
             assert (dataset.context_id, key_id, value_id) in model.node_memory
+
+
+def test_selector_loss_is_not_diluted_by_unrelated_token_events():
+    """Selector loss is averaged over eligible branch queries, not all tokens."""
+    nll_losses = [
+        torch.tensor(2.0, requires_grad=True) for _ in range(64)
+    ]
+    pointer_losses = [
+        torch.tensor(1.1, requires_grad=True) for _ in range(5)
+    ]
+
+    objective = _normalized_contextual_objective(
+        nll_losses,
+        pointer_losses,
+        pointer_loss_weight=1.0,
+    )
+
+    assert torch.allclose(objective.detach(), torch.tensor(3.1), atol=1e-6)
+    objective.backward()
+    assert torch.allclose(
+        pointer_losses[0].grad, torch.tensor(1.0 / 5), atol=1e-6
+    )
+    assert torch.allclose(
+        nll_losses[0].grad, torch.tensor(1.0 / 64), atol=1e-6
+    )
