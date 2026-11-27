@@ -227,3 +227,57 @@ def test_cue_is_recurrent_context_but_does_not_split_dansn_candidate_parent():
     assert torch.count_nonzero(
         trace["persistent_token_distribution"]
     ).item() == 3
+
+
+def test_training_query_records_are_read_only_after_supports_are_written():
+    dataset = generate_dataset(
+        seed=251,
+        train_keys=6,
+        heldout_keys=2,
+        cue_count=3,
+        value_count=8,
+        train_episodes=2,
+        train_delay=2,
+        test_delay=3,
+    )
+    query_records = [
+        record
+        for record in dataset.train_records
+        if any(event[3] for event in record)
+    ]
+    support_records = [
+        record
+        for record in dataset.train_records
+        if all(event[4] for event in record) and len(record) == 3
+    ]
+
+    assert len(query_records) == 2 * 6 * 3
+    assert len(support_records) == 2 * 6 * 3
+    assert all(not event[4] for record in query_records for event in record)
+    assert all(event[4] for record in support_records for event in record)
+    assert all(
+        record[-1][3] is True and record[-1][4] is False
+        for record in query_records
+    )
+
+
+def test_heldout_support_ingestion_writes_shared_parent_memory():
+    torch.manual_seed(257)
+    dataset = generate_dataset(
+        seed=257,
+        train_keys=6,
+        heldout_keys=2,
+        cue_count=3,
+        value_count=8,
+        train_episodes=1,
+        train_delay=1,
+        test_delay=2,
+    )
+    model = _make_model(dataset)
+    ingest_heldout_supports(model, dataset)
+
+    key_id = dataset.queries[0].key_id
+    assert (dataset.context_id, key_id) in model.node_memory
+    for cue_id, support_key, value_id in dataset.test_supports:
+        if support_key == key_id:
+            assert (dataset.context_id, key_id, value_id) in model.node_memory
