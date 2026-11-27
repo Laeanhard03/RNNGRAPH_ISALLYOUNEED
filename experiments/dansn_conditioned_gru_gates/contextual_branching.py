@@ -334,6 +334,201 @@ def _run_query(
     return logits, (dataset.context_id, key_id), trace
 
 
+@torch.no_grad()
+def trace_query_trajectory(
+    model: DANSNFourGateGRU,
+    dataset: ContextualBranchDataset,
+    cue_id: int,
+    key_id: int,
+    distractor_ids: Sequence[int],
+) -> list[dict]:
+    """Capture hidden-state and four-gate values after every query input.
+
+    This is read-only with respect to model parameters and persistent writes.
+    The graph-history stream remains separate from the recurrent cue stream.
+    """
+    state = model.initial_state()
+    steps: list[tuple[str, int, tuple[int, ...]]] = [
+        ("cue", int(cue_id), (int(cue_id),))
+    ]
+    steps.extend(
+        (f"distractor_{index}", int(token), (int(token),))
+        for index, token in enumerate(distractor_ids, start=1)
+    )
+    steps.extend([
+        ("context", int(dataset.context_id), (int(dataset.context_id),)),
+        ("key", int(key_id), (int(dataset.context_id), int(key_id))),
+    ])
+
+    trajectory = []
+    for stage, token_id, graph_history in steps:
+        _logits, state, trace = model.forward_step(
+            token_id, graph_history, state
+        )
+        previous = trace["previous_hidden"].detach().clone()
+        hidden = state.hidden.detach().clone()
+        reset = trace["reset_gate"].detach()
+        update = trace["update_gate"].detach()
+        reset_filtered = reset * previous
+        carried = (1.0 - update) * reset_filtered
+        previous_norm = float(torch.linalg.vector_norm(previous).cpu())
+        denominator = previous_norm + 1e-8
+
+        def mean_value(name: str) -> float:
+            value = trace[name]
+            if isinstance(value, torch.Tensor):
+                return float(value.detach().float().mean().cpu())
+            return float(value)
+
+        def std_value(name: str) -> float:
+            value = trace[name].detach().float()
+            return float(value.std(unbiased=False).cpu())
+
+        trajectory.append({
+            "stage": stage,
+            "token_id": int(token_id),
+            "previous_hidden": previous,
+            "hidden": hidden,
+            "recurrent_hidden": trace["recurrent_hidden"].detach().clone(),
+            "pointer_query": trace["pointer_query"].detach().clone(),
+            "reset_gate_mean": mean_value("reset_gate"),
+            "reset_gate_std": std_value("reset_gate"),
+            "update_gate_mean": mean_value("update_gate"),
+            "update_gate_std": std_value("update_gate"),
+            "memory_injection_gate_mean": mean_value("memory_injection_gate"),
+            "memory_injection_gate_std": std_value("memory_injection_gate"),
+            "effective_memory_mix_mean": mean_value("effective_memory_mix"),
+            "hidden_memory_mix_mean": mean_value("hidden_memory_mix"),
+            "memory_available": mean_value("memory_available"),
+            "persistent_write_gate_mean": mean_value("persistent_write_gate"),
+            "reset_retention_ratio": float(
+                torch.linalg.vector_norm(reset_filtered).cpu()
+            ) / denominator,
+            "carry_retention_ratio": float(
+                torch.linalg.vector_norm(carried).cpu()
+            ) / denominator,
+            "hidden_norm": float(torch.linalg.vector_norm(hidden).cpu()),
+            "recurrent_hidden_norm": float(
+                torch.linalg.vector_norm(trace["recurrent_hidden"]).cpu()
+            ),
+            "memory_proposal_norm": float(
+                torch.linalg.vector_norm(trace["memory_proposal"]).cpu()
+            ),
+        })
+    return trajectory
+
+
+def _pairwise_vector_metrics(vectors: Sequence[torch.Tensor]) -> dict[str, float]:
+    """Average pairwise cosine and L2 distance for a small cue set."""
+    cosines = []
+    distances = []
+    for left_index in range(len(vectors)):
+        for right_index in range(left_index + 1, len(vectors)):
+            left = vectors[left_index]
+            right = vectors[right_index]
+            cosines.append(float(
+                F.cosine_similarity(left, right, dim=0, eps=1e-8).cpu()
+            ))
+            distances.append(float(
+                torch.linalg.vector_norm(left - right).cpu()
+            ))
+    return {
+        "cosine": sum(cosines) / max(len(cosines), 1),
+        "l2": sum(distances) / max(len(distances), 1),
+    }
+
+
+@torch.no_grad()
+def collect_cue_trajectory_diagnostics(
+    model: DANSNFourGateGRU,
+    dataset: ContextualBranchDataset,
+) -> dict:
+    """Measure where cue separation survives or collapses under matched noise."""
+    stage_values: dict[str, dict[str, list[float]]] = {}
+    key_ids = sorted({int(query.key_id) for query in dataset.queries})
+    gate_metrics = (
+        "reset_gate_mean",
+        "reset_gate_std",
+        "update_gate_mean",
+        "update_gate_std",
+        "memory_injection_gate_mean",
+        "memory_injection_gate_std",
+        "effective_memory_mix_mean",
+        "hidden_memory_mix_mean",
+        "memory_available",
+        "persistent_write_gate_mean",
+        "reset_retention_ratio",
+        "carry_retention_ratio",
+        "hidden_norm",
+        "recurrent_hidden_norm",
+        "memory_proposal_norm",
+    )
+
+    for key_id in key_ids:
+        reference_query = next(
+            query for query in dataset.queries if int(query.key_id) == key_id
+        )
+        cue_ids = sorted({
+            int(cue_id)
+            for cue_id, support_key, _value in dataset.test_supports
+            if int(support_key) == key_id
+        })
+        trajectories = [
+            trace_query_trajectory(
+                model,
+                dataset,
+                cue_id,
+                key_id,
+                reference_query.distractor_ids,
+            )
+            for cue_id in cue_ids
+        ]
+        if not trajectories:
+            continue
+
+        for stage_index, reference_row in enumerate(trajectories[0]):
+            stage = reference_row["stage"]
+            bucket = stage_values.setdefault(stage, {
+                name: [] for name in (
+                    "hidden_cosine", "hidden_l2",
+                    "previous_hidden_cosine", "previous_hidden_l2",
+                    "pointer_query_cosine", "pointer_query_l2",
+                    *gate_metrics,
+                )
+            })
+            rows = [trajectory[stage_index] for trajectory in trajectories]
+            for source, prefix in (
+                ("hidden", "hidden"),
+                ("previous_hidden", "previous_hidden"),
+                ("pointer_query", "pointer_query"),
+            ):
+                metrics = _pairwise_vector_metrics([
+                    row[source] for row in rows
+                ])
+                bucket[f"{prefix}_cosine"].append(metrics["cosine"])
+                bucket[f"{prefix}_l2"].append(metrics["l2"])
+            for metric in gate_metrics:
+                bucket[metric].append(sum(
+                    float(row[metric]) for row in rows
+                ) / len(rows))
+
+    stages = []
+    for stage, values in stage_values.items():
+        stages.append({
+            "stage": stage,
+            "keys_measured": len(values["hidden_l2"]),
+            **{
+                name: sum(items) / max(len(items), 1)
+                for name, items in values.items()
+            },
+        })
+    return {
+        "matched_distractors_per_key": True,
+        "keys_measured": len(key_ids),
+        "stages": stages,
+    }
+
+
 def _normalized_contextual_objective(
     nll_losses: Sequence[torch.Tensor],
     pointer_losses: Sequence[torch.Tensor],
@@ -577,42 +772,17 @@ def evaluate_model(
                 int(reset_pointer.argmax().item()) == target
             )
 
-    cue_state_cosines: list[float] = []
-    cue_state_distances: list[float] = []
-    # Compare different cues for each key while holding the distractor sequence
-    # fixed. This isolates cue encoding from nuisance variation in noise tokens.
-    for key_id in sorted({int(query.key_id) for query in dataset.queries}):
-        reference_query = next(
-            query for query in dataset.queries if int(query.key_id) == key_id
-        )
-        cue_states: dict[int, torch.Tensor] = {}
-        key_cues = sorted({
-            int(cue_id)
-            for cue_id, support_key, _value in dataset.test_supports
-            if int(support_key) == key_id
-        })
-        for cue_id in key_cues:
-            _cue_logits, _cue_history, cue_trace = _run_query(
-                model,
-                dataset,
-                cue_id,
-                key_id,
-                reference_query.distractor_ids,
-            )
-            cue_states[cue_id] = cue_trace["previous_hidden"].detach().clone()
-        ordered_states = [
-            cue_states[cue_id] for cue_id in sorted(cue_states)
-        ]
-        for left_index in range(len(ordered_states)):
-            for right_index in range(left_index + 1, len(ordered_states)):
-                left = ordered_states[left_index]
-                right = ordered_states[right_index]
-                cue_state_cosines.append(float(
-                    F.cosine_similarity(left, right, dim=0).cpu()
-                ))
-                cue_state_distances.append(float(
-                    torch.linalg.vector_norm(left - right).cpu()
-                ))
+    cue_trajectory = collect_cue_trajectory_diagnostics(model, dataset)
+    key_stage = next(
+        (item for item in cue_trajectory["stages"] if item["stage"] == "key"),
+        None,
+    )
+    cue_state_cosines = (
+        [float(key_stage["previous_hidden_cosine"])] if key_stage else []
+    )
+    cue_state_distances = (
+        [float(key_stage["previous_hidden_l2"])] if key_stage else []
+    )
 
     denominator = max(query_count, 1)
     return {
@@ -656,6 +826,7 @@ def evaluate_model(
         "mean_same_key_cross_cue_l2": (
             sum(cue_state_distances) / max(len(cue_state_distances), 1)
         ),
+        "cue_trajectory": cue_trajectory,
         "graph_stats": model.graph_stats(),
     }
 

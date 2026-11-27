@@ -9,6 +9,8 @@ from experiments.dansn_conditioned_gru_gates.contextual_branching import (
     generate_dataset,
     ingest_heldout_supports,
     _normalized_contextual_objective,
+    trace_query_trajectory,
+    collect_cue_trajectory_diagnostics,
 )
 from experiments.dansn_conditioned_gru_gates.four_gate import DANSNFourGateGRU
 
@@ -388,3 +390,70 @@ def test_recurrent_query_state_is_traceable_and_cue_sensitive():
         for i in range(len(states))
         for j in range(i + 1, len(states))
     )
+
+
+def test_time_resolved_cue_trace_reports_gate_and_state_changes():
+    torch.manual_seed(271)
+    dataset = generate_dataset(
+        seed=271,
+        train_keys=6,
+        heldout_keys=2,
+        cue_count=3,
+        value_count=8,
+        train_episodes=1,
+        train_delay=2,
+        test_delay=3,
+    )
+    model = _make_model(dataset)
+    ingest_heldout_supports(model, dataset)
+    query = dataset.queries[0]
+
+    trajectory = trace_query_trajectory(
+        model,
+        dataset,
+        query.cue_id,
+        query.key_id,
+        query.distractor_ids,
+    )
+    assert [row["stage"] for row in trajectory] == [
+        "cue",
+        "distractor_1",
+        "distractor_2",
+        "distractor_3",
+        "context",
+        "key",
+    ]
+    required_metrics = (
+        "reset_gate_mean",
+        "update_gate_mean",
+        "memory_injection_gate_mean",
+        "effective_memory_mix_mean",
+        "reset_retention_ratio",
+        "carry_retention_ratio",
+        "hidden_norm",
+        "recurrent_hidden_norm",
+    )
+    for row in trajectory:
+        assert torch.isfinite(row["hidden"]).all()
+        assert torch.isfinite(row["previous_hidden"]).all()
+        for metric in required_metrics:
+            assert torch.isfinite(torch.tensor(row[metric]))
+
+    diagnostics = collect_cue_trajectory_diagnostics(model, dataset)
+    assert diagnostics["matched_distractors_per_key"] is True
+    assert diagnostics["keys_measured"] == 2
+    assert [row["stage"] for row in diagnostics["stages"]] == [
+        "cue",
+        "distractor_1",
+        "distractor_2",
+        "distractor_3",
+        "context",
+        "key",
+    ]
+    key_metrics = diagnostics["stages"][-1]
+    assert torch.isfinite(torch.tensor(
+        key_metrics["previous_hidden_cosine"]
+    ))
+    assert torch.isfinite(torch.tensor(
+        key_metrics["pointer_query_l2"]
+    ))
