@@ -495,6 +495,8 @@ def evaluate_model(
     vector_coverage = 0
     memory_mix: list[float] = []
     pointer_mix: list[float] = []
+    pointer_target_score_margins: list[float] = []
+    query_states_by_key: dict[int, dict[int, torch.Tensor]] = {}
     query_count = len(dataset.queries)
 
     for query in dataset.queries:
@@ -512,6 +514,23 @@ def evaluate_model(
         mixed_target_probs.append(float(probabilities[target].cpu()))
 
         pointer = trace["persistent_token_distribution"]
+        query_states_by_key.setdefault(int(query.key_id), {})[
+            int(query.cue_id)
+        ] = trace["previous_hidden"].detach().clone()
+        candidate_ids = trace["pointer_candidate_ids"]
+        candidate_scores = trace["pointer_scores"]
+        target_positions = torch.nonzero(
+            candidate_ids == target, as_tuple=False
+        ).flatten()
+        if target_positions.numel() == 1 and candidate_scores.numel() > 1:
+            target_position = int(target_positions[0].item())
+            other_scores = torch.cat((
+                candidate_scores[:target_position],
+                candidate_scores[target_position + 1:],
+            ))
+            pointer_target_score_margins.append(float(
+                (candidate_scores[target_position] - other_scores.max()).cpu()
+            ))
         candidate_count = int(torch.count_nonzero(pointer).item())
         candidate_counts.append(float(candidate_count))
         pointer_target_probs.append(float(pointer[target].cpu()))
@@ -561,6 +580,23 @@ def evaluate_model(
                 int(reset_pointer.argmax().item()) == target
             )
 
+    cue_state_cosines: list[float] = []
+    cue_state_distances: list[float] = []
+    for cue_states in query_states_by_key.values():
+        ordered_states = [
+            cue_states[cue_id] for cue_id in sorted(cue_states)
+        ]
+        for left_index in range(len(ordered_states)):
+            for right_index in range(left_index + 1, len(ordered_states)):
+                left = ordered_states[left_index]
+                right = ordered_states[right_index]
+                cue_state_cosines.append(float(
+                    F.cosine_similarity(left, right, dim=0).cpu()
+                ))
+                cue_state_distances.append(float(
+                    torch.linalg.vector_norm(left - right).cpu()
+                ))
+
     denominator = max(query_count, 1)
     return {
         **support_metrics,
@@ -593,6 +629,16 @@ def evaluate_model(
         "mean_context_pointer_gain": (
             sum(pointer_target_probs) - sum(reset_pointer_target_probs)
         ) / denominator,
+        "mean_pointer_target_score_margin": (
+            sum(pointer_target_score_margins)
+            / max(len(pointer_target_score_margins), 1)
+        ),
+        "mean_same_key_cross_cue_cosine": (
+            sum(cue_state_cosines) / max(len(cue_state_cosines), 1)
+        ),
+        "mean_same_key_cross_cue_l2": (
+            sum(cue_state_distances) / max(len(cue_state_distances), 1)
+        ),
         "graph_stats": model.graph_stats(),
     }
 
@@ -718,6 +764,9 @@ def run_benchmark(
         "mean_effective_memory_mix",
         "mean_effective_pointer_mix",
         "mean_context_pointer_gain",
+        "mean_pointer_target_score_margin",
+        "mean_same_key_cross_cue_cosine",
+        "mean_same_key_cross_cue_l2",
         "last_train_mean_loss",
         "last_train_mean_pointer_loss",
         "last_train_pointer_supervision_examples",
