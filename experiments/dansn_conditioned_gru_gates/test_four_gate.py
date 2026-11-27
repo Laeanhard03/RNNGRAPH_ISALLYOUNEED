@@ -384,7 +384,14 @@ def test_memory_gate_injects_persistent_memory_even_when_update_gate_is_closed()
     assert gates["update_gate"].max().item() < 1e-6
     assert gates["memory_injection_gate"].min().item() > 0.999
     assert gates["effective_memory_mix"].min().item() > 0.999
-    assert torch.allclose(hidden, expected, atol=1e-5)
+    assert torch.allclose(
+        gates["hidden_memory_mix"],
+        torch.full((8,), 0.5),
+        atol=1e-5,
+    )
+    # A closed update gate does not block the separate memory route, but
+    # recurrent-preserving fusion now caps its one-step contribution at 50%.
+    assert torch.allclose(hidden, 0.5 * expected, atol=1e-5)
 
 
 def test_reset_gate_can_clear_hidden_carry_not_just_candidate_input():
