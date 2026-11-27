@@ -346,3 +346,33 @@ The cell now distinguishes the controller's full effective memory mix from the c
 - The resulting hidden state remains a blend of the recurrent transition and the persistent memory proposal; DANSN is still a direct state source, but cannot erase the working context in one step.
 
 Added a regression test that forces the memory gate to saturate and verifies that the hidden state moves toward retrieved memory while staying aligned with the previous recurrent state. The updated code and test are committed on the existing experimental branch. The next contextual benchmark must determine whether this preserves the cue strongly enough to improve pointer ranking and counterfactual selection. No improvement is claimed before that run completes.
+
+
+## Recurrent-preserving fusion benchmark — 2026-11-27
+
+The bounded hidden-state memory blend passed the strict contextual unit tests and all three triggered GitHub workflows on commit `6089815dc42f854109588472a33848368247335c`. The contextual multi-branch benchmark completed in [Actions run 45932844216](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45932844216), artifact 15169398947.
+
+Three-seed full-model results remained at chance:
+- output top-1: 33.33%;
+- pointer top-1: 33.33%;
+- counterfactual cue selection: 33.33%;
+- reset-hidden pointer top-1: 33.33%;
+- pointer target probability: 0.333334;
+- candidate count: 3.0/query;
+- persistent write and query coverage: 100%.
+
+The hidden-state injection coefficient was bounded to at most 0.5 of the full effective memory mix, but this did not increase cue-dependent ranking. Thus, the overwrite hypothesis was plausible and the residual safeguard is useful, but it was not sufficient to explain or fix the selector failure.
+
+### Second training-protocol issue: selector gradient dilution
+
+A further audit found that the training loop appended `nll_loss + pointer_loss_weight × selector_loss` to a list for every token and then averaged that list over a chunk. Only key-query events carry selector supervision (192 examples among 2,391 total training events in the default protocol). This unintentionally scales the selector objective by the small fraction of eligible events, so a weight of 1.0 does not mean equal weighting relative to the token objective.
+
+The trainer now accumulates two loss sets independently:
+- next-token NLL, averaged over every event in the chunk;
+- pointer-ranking loss, averaged only over eligible supervised branch-query events in the same chunk.
+
+The chunk objective is `mean(NLL) + pointer_loss_weight × mean(selector_loss over eligible queries)`. Chunks with no eligible selector queries use only the NLL term. This preserves causal predict-before-write ordering and does not alter inference or graph storage.
+
+Added a mathematical gradient test with 64 token losses and 5 selector losses. It verifies the selector gradients are averaged over 5 eligible examples (1/5 each), rather than diluted over all 64 events. The corrected benchmark is now running in [Actions run 45981519637](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45981519637); its performance result remains pending until the artifact is inspected.
+
+This correction tests the optimizer objective scaling before changing the candidate-scoring architecture. If ranking remains near `ln(3)` after this normalization, next isolate the recurrent cue representation and introduce an explicit additive candidate scorer with separate query, stored-candidate, and interaction terms. Do not claim contextual recall until counterfactual cue selection exceeds 33.33% and reset-state performance declines.
