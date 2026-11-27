@@ -87,6 +87,8 @@ jobs:
           metrics = [
               ("query_top1_accuracy", "Output top-1"),
               ("pointer_top1_accuracy", "Pointer top-1"),
+              ("train_key_pointer_top1_accuracy", "Train-key pointer top-1"),
+              ("train_key_counterfactual_pointer_top1_accuracy", "Train-key counterfactual"),
               ("counterfactual_pointer_top1_accuracy", "Counterfactual cue"),
               ("reset_state_pointer_top1_accuracy", "Pointer with state reset"),
               ("mean_pointer_candidate_count", "Candidates/query"),

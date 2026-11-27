@@ -476,3 +476,9 @@ All variants instantiate the protected-context parameters so model parameter cou
 
 Acceptance requires pointer and counterfactual cue selection above 33.33% across all three seeds, positive target score margin, and lower performance when the protected recurrent state is removed. Report state-separation trajectories and candidate coverage alongside accuracy. This remains a synthetic mechanism benchmark, not evidence of language-level or semantic reasoning.
 
+### Training-key versus held-out-key generalization diagnostic
+
+The v6 result shows a large mismatch for protected-context variants: training pointer loss about 0.0033 but held-out pointer accuracy 20.83%, below the three-way 33.33% chance baseline. The next benchmark adds a read-only train-key evaluation after training. It uses the same query length/distractor delay, shared (context,key) candidate parent, three stored candidates, and counterfactual-cue check as held-out evaluation. No parameters are updated and no target writes occur during this diagnostic.
+
+This separates two possibilities: the selector learns cue-conditioned ranking on seen keys but fails to generalize to held-out key branches, or the small training pointer loss does not represent actual train-key retrieval under the final evaluation protocol. Compare train-key and held-out metrics, candidate counts, and margins before selecting another state/query architecture.
+

@@ -9,6 +9,8 @@ from experiments.dansn_conditioned_gru_gates.contextual_branching import (
     generate_dataset,
     ingest_heldout_supports,
     _normalized_contextual_objective,
+    evaluate_training_key_diagnostics,
+    train_contextual_stream,
     trace_query_trajectory,
     collect_cue_trajectory_diagnostics,
 )
@@ -510,3 +512,29 @@ def test_protected_context_makes_selector_query_depend_on_cue_after_matched_dela
         for i in range(len(traces))
         for j in range(i + 1, len(traces))
     )
+
+
+def test_training_key_diagnostics_uses_same_three_candidate_query_protocol():
+    torch.manual_seed(281)
+    dataset = generate_dataset(
+        seed=281,
+        train_keys=6,
+        heldout_keys=2,
+        cue_count=3,
+        value_count=8,
+        train_episodes=1,
+        train_delay=2,
+        test_delay=3,
+    )
+    model = _make_model(dataset)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=2e-3)
+    train_contextual_stream(
+        model, dataset, optimizer, chunk_size=32, pointer_loss_weight=1.0
+    )
+    diagnostics = evaluate_training_key_diagnostics(model, dataset)
+    assert diagnostics["query_count"] == 18
+    assert diagnostics["mean_candidate_count"] == 3.0
+    assert diagnostics["persistent_vector_query_coverage"] == 1.0
+    assert 0.0 <= diagnostics["pointer_top1_accuracy"] <= 1.0
+    assert 0.0 <= diagnostics["counterfactual_pointer_top1_accuracy"] <= 1.0
+    assert torch.isfinite(torch.tensor(diagnostics["mean_target_score_margin"]))

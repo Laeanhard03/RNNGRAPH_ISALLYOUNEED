@@ -686,6 +686,91 @@ def train_contextual_stream(
 
 
 @torch.no_grad()
+def evaluate_training_key_diagnostics(
+    model: DANSNFourGateGRU,
+    dataset: ContextualBranchDataset,
+) -> dict:
+    """Evaluate training-key branches with the held-out query protocol.
+
+    This is read-only: it adds no target writes and performs no parameter updates.
+    """
+    mapping: dict[int, dict[int, int]] = {}
+    for pair, value in dataset.metadata["train_mapping"].items():
+        key_text, cue_text = pair.split(":")
+        mapping.setdefault(int(key_text), {})[int(cue_text)] = int(value)
+
+    if not dataset.queries:
+        return {
+            "query_count": 0,
+            "pointer_top1_accuracy": 0.0,
+            "counterfactual_pointer_top1_accuracy": 0.0,
+            "mean_pointer_target_probability": 0.0,
+            "mean_target_score_margin": 0.0,
+            "mean_candidate_count": 0.0,
+            "persistent_vector_query_coverage": 0.0,
+        }
+
+    distractors = dataset.queries[0].distractor_ids
+    correct = 0
+    counterfactual_correct = 0
+    target_probabilities = []
+    margins = []
+    candidate_counts = []
+    coverage = 0
+    query_count = 0
+
+    for key_id, cue_mapping in sorted(mapping.items()):
+        cue_ids = sorted(cue_mapping)
+        for cue_index, cue_id in enumerate(cue_ids):
+            target_id = cue_mapping[cue_id]
+            _logits, _history, trace = _run_query(
+                model, dataset, cue_id, key_id, distractors
+            )
+            pointer = trace["persistent_token_distribution"]
+            candidate_ids = trace["pointer_candidate_ids"]
+            scores = trace["pointer_scores"]
+            candidate_count = int(torch.count_nonzero(pointer).item())
+            candidate_counts.append(float(candidate_count))
+            query_count += 1
+            target_probabilities.append(float(pointer[target_id].cpu()))
+            correct += int(
+                candidate_count > 0 and int(pointer.argmax().item()) == target_id
+            )
+            expected_path = (dataset.context_id, key_id, target_id)
+            coverage += int(expected_path in trace["persistent_memory_paths"])
+
+            positions = torch.nonzero(candidate_ids == target_id, as_tuple=False).flatten()
+            if positions.numel() == 1 and scores.numel() > 1:
+                position = int(positions[0].item())
+                other_scores = torch.cat((scores[:position], scores[position + 1:]))
+                margins.append(float((scores[position] - other_scores.max()).cpu()))
+
+            if len(cue_ids) > 1:
+                alternate_cue = cue_ids[(cue_index + 1) % len(cue_ids)]
+                alternate_target = cue_mapping[alternate_cue]
+                _wrong_logits, _wrong_history, wrong_trace = _run_query(
+                    model, dataset, alternate_cue, key_id, distractors
+                )
+                wrong_pointer = wrong_trace["persistent_token_distribution"]
+                if torch.count_nonzero(wrong_pointer).item():
+                    counterfactual_correct += int(
+                        int(wrong_pointer.argmax().item()) == alternate_target
+                    )
+
+    denominator = max(query_count, 1)
+    return {
+        "query_count": query_count,
+        "pointer_top1_accuracy": correct / denominator,
+        "counterfactual_pointer_top1_accuracy": counterfactual_correct / denominator,
+        "mean_pointer_target_probability": sum(target_probabilities) / denominator,
+        "mean_target_score_margin": sum(margins) / max(len(margins), 1),
+        "mean_candidate_count": sum(candidate_counts) / denominator,
+        "persistent_vector_query_coverage": coverage / denominator,
+    }
+
+
+
+@torch.no_grad()
 def evaluate_model(
     model: DANSNFourGateGRU,
     dataset: ContextualBranchDataset,
@@ -848,6 +933,7 @@ def evaluate_model(
             sum(cue_state_distances) / max(len(cue_state_distances), 1)
         ),
         "cue_trajectory": cue_trajectory,
+        "training_key_diagnostics": evaluate_training_key_diagnostics(model, dataset),
         "mean_same_key_cross_cue_selection_l2": (
             float(key_stage["selection_hidden_l2"]) if key_stage else 0.0
         ),
@@ -1005,6 +1091,21 @@ def run_benchmark(
                 for run in runs
             ])
             for metric in metrics
+        }
+        train_diagnostics = [
+            run["results"][system_name]["training_key_diagnostics"]
+            for run in runs
+        ]
+        summary[system_name]["training_key_diagnostics"] = {
+            field: _stats([float(item[field]) for item in train_diagnostics])
+            for field in (
+                "pointer_top1_accuracy",
+                "counterfactual_pointer_top1_accuracy",
+                "mean_pointer_target_probability",
+                "mean_target_score_margin",
+                "mean_candidate_count",
+                "persistent_vector_query_coverage",
+            )
         }
         stage_rows = runs[0]["results"][system_name]["cue_trajectory"]["stages"]
         summary[system_name]["stage_diagnostics"] = {}
