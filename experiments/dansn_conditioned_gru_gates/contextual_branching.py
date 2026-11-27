@@ -22,7 +22,6 @@ import torch.nn.functional as F
 
 from agi import Brain
 from experiments.dansn_conditioned_gru_gates.four_gate import DANSNFourGateGRU
-from persistent_dansn_rnn import train_stream
 
 
 @dataclass(frozen=True)
