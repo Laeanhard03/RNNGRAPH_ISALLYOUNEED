@@ -127,9 +127,11 @@ class DANSNFourGateCell(nn.Module):
             + update_gate * candidate
         )
 
-        # DANSN persistent memory has its own route into h_t. Unlike placing
-        # memory only inside candidate, this blend is NOT attenuated by the
-        # update gate a second time.
+        # Persistent DANSN memory remains a separate state source, but it
+        # must not erase the recurrent cue/working context at a single step.
+        # Keep at least half of the recurrent transition in the hidden state,
+        # even when the learned memory gate saturates. The full controller
+        # memory mix still drives the decoder skip and direct pointer route.
         memory_proposal = torch.tanh(self.memory_projection(graph_memory))
         if isinstance(memory_available, Tensor):
             availability = memory_available.to(
@@ -138,15 +140,17 @@ class DANSNFourGateCell(nn.Module):
         else:
             availability = inputs.new_tensor(float(bool(memory_available)))
         memory_mix = memory_gate * availability
+        hidden_memory_mix = 0.5 * memory_mix
         hidden = (
-            (1.0 - memory_mix) * recurrent_hidden
-            + memory_mix * memory_proposal
+            (1.0 - hidden_memory_mix) * recurrent_hidden
+            + hidden_memory_mix * memory_proposal
         )
         gates = {
             "update_gate": update_gate,
             "reset_gate": reset_gate,
             "memory_injection_gate": memory_gate,
             "effective_memory_mix": memory_mix,
+            "hidden_memory_mix": hidden_memory_mix,
             "memory_available": availability,
             "persistent_write_gate": write_gate,
             "candidate": candidate,
