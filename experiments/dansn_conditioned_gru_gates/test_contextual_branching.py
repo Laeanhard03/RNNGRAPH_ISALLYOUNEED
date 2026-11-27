@@ -143,8 +143,9 @@ def test_training_query_positions_point_to_key_and_revealed_value():
         target_id = dataset.train_tokens[position + 1]
         assert dataset.train_tokens[position - 1] == dataset.context_id
         assert any(
-            train_key == key_id and target_id == value_id
-            for (train_key, _cue), value_id in dataset.metadata[
+            int(mapping_key.split(":")[0]) == key_id
+            and target_id == value_id
+            for mapping_key, value_id in dataset.metadata[
                 "train_mapping"
             ].items()
         )
