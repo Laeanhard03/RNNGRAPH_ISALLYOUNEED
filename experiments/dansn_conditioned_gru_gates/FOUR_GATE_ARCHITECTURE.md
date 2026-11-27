@@ -313,3 +313,12 @@ Corrective implementation on the existing branch:
 - Training logs pointer candidate count and the number of truly supervised selector examples. The tests now require the expected number of eligible examples and exactly three candidates at those query positions; they also verify that all cue branches share the same stored DANSN parent path.
 
 Corrected validation was triggered on commits 5332745b91c9c5ec1b6733ef9fce34b3695e3996 and d3c38993cb7e2ff77555a72341fb1adcb70a68f7. Actions runs [45925675394](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45925675394) and [45925700464](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45925700464) are the contextual benchmark validations; results are pending at the time this note was written. Do not make a new performance claim until an artifact shows nonzero selector-supervision examples and candidate count three at training query positions.
+
+
+### Train/evaluation write-parity correction
+
+A further audit found one more train/test mismatch: earlier selector-training query records wrote observed query-prefix tokens into DANSN, while held-out evaluation query prefixes were read-only. The selector could therefore see a query-specific graph write during training that was not available at evaluation.
+
+The latest implementation now distinguishes two per-event flags: pointer-supervision eligibility and whether the event's known next token is written to DANSN after scoring. Support records write each observed support continuation after prediction. Query-training records are read-only, matching held-out query evaluation; the auxiliary pointer loss remains active at the query key only. Held-out support ingestion was updated to process and write cue→context, context→key, and key→value in the same causal order as training support records.
+
+Additional tests verify: support events write; query events do not write; each query still receives pointer supervision; and held-out support ingestion writes both the shared (context,key) parent state and all three child branch vectors. The latest strict validation on this policy is [Actions run 45926132236](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45926132236); it is pending. The earlier benchmark runs 45925675394 and 45925700464 used the previous query-write policy and must be treated as protocol-debug runs, not final evidence.
