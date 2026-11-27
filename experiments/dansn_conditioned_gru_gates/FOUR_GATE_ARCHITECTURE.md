@@ -327,3 +327,22 @@ Additional tests verify: support events write; query events do not write; each q
 ### Final protocol CI status
 
 The strict final-code Actions run [45926132236](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45926132236) has passed the complete four-gate/contextual-branch test step, including shared-parent candidate coverage, nonzero selector supervision, training query read-only policy, and held-out support write parity. The separate loader workflow [45926132263](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45926132263) also passed. The three-seed benchmark in run 45926132236 remains in its training/evaluation step; no result artifact is available yet. Branch compare: 120 commits ahead of main, 0 behind; canonical agi.py unchanged.
+
+
+## Final matched-protocol selector result and recurrent-preservation correction — 2026-11-27
+
+The strict final-protocol benchmark in [Actions run 45926132236](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45926132236) completed successfully and uploaded artifact 15166972788. The contextual test step passed. The artifact confirms that selector supervision is now active: each seed/system with writes receives 192 supervised training query positions and exactly 3 candidates at each, with mean auxiliary pointer loss about 1.1057 (close to the uniform three-way loss ln(3) = 1.0986).
+
+However, the full four-gate model remains at chance across the three seeds: output top-1 33.33%, pointer top-1 33.33%, counterfactual cue selection 33.33%, and reset-state pointer top-1 33.33%. Mean pointer target probability is 0.3333328; the mean context pointer gain is effectively zero. Persistent write and query coverage remain 100%, with 3 candidates/query. This validates storage, retrieval, and the supervision path, but **does not validate cue-conditioned branch selection**.
+
+A key diagnostic is that the effective memory mix at query time averages 0.985. In the previous cell, that coefficient directly blended the retrieved memory proposal over the recurrent transition, allowing a saturated memory gate to replace nearly all of the cue-bearing hidden state at shared context/key steps. The pointer selector therefore had little useful recurrent cue signal to rank candidates with.
+
+### Recurrent-preserving memory injection — implemented, benchmark pending
+
+The cell now distinguishes the controller's full effective memory mix from the coefficient used to blend persistent memory into the recurrent hidden state:
+
+- <code>effective_memory_mix = memory_gate × availability</code> remains the full signal for the decoder memory skip and direct pointer probability mixture.
+- <code>hidden_memory_mix = 0.5 × effective_memory_mix</code> bounds one-step persistent-state replacement so at least half of the recurrent transition remains in the hidden state.
+- The resulting hidden state remains a blend of the recurrent transition and the persistent memory proposal; DANSN is still a direct state source, but cannot erase the working context in one step.
+
+Added a regression test that forces the memory gate to saturate and verifies that the hidden state moves toward retrieved memory while staying aligned with the previous recurrent state. The updated code and test are committed on the existing experimental branch. The next contextual benchmark must determine whether this preserves the cue strongly enough to improve pointer ranking and counterfactual selection. No improvement is claimed before that run completes.
