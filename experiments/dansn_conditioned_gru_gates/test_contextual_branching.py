@@ -457,3 +457,56 @@ def test_time_resolved_cue_trace_reports_gate_and_state_changes():
     assert torch.isfinite(torch.tensor(
         key_metrics["pointer_query_l2"]
     ))
+
+
+def test_protected_context_makes_selector_query_depend_on_cue_after_matched_delay():
+    torch.manual_seed(277)
+    dataset = generate_dataset(
+        seed=277,
+        train_keys=6,
+        heldout_keys=2,
+        cue_count=3,
+        value_count=8,
+        train_episodes=1,
+        train_delay=2,
+        test_delay=4,
+    )
+    baseline = _make_model(dataset)
+    model = DANSNFourGateGRU(
+        baseline.engine,
+        baseline.embedding.num_embeddings,
+        hidden_size=baseline.hidden_size,
+        window_size=baseline.window_size,
+        graph_depth=baseline.graph_depth,
+        message_rounds=baseline.message_rounds,
+        max_active_nodes=baseline.max_active_nodes,
+        max_memory_nodes=baseline.max_memory_nodes,
+        transition_variant="protected_context",
+    )
+    with torch.no_grad():
+        model.four_gate_cell.controller.weight.zero_()
+        model.four_gate_cell.controller.bias.zero_()
+        model.four_gate_cell.controller.bias[
+            3 * model.hidden_size:4 * model.hidden_size
+        ].fill_(20.0)
+        model.four_gate_cell.controller.bias[
+            2 * model.hidden_size:3 * model.hidden_size
+        ].fill_(2.0)
+    ingest_heldout_supports(model, dataset)
+    query = next(q for q in dataset.queries if q.key_id == dataset.queries[0].key_id)
+    cue_ids = sorted({
+        cue for cue, key, _value in dataset.test_supports if key == query.key_id
+    })
+    traces = [
+        _run_query(model, dataset, cue, query.key_id, query.distractor_ids)[2]
+        for cue in cue_ids
+    ]
+    assert all(trace["pointer_available"] for trace in traces)
+    assert all(trace["protected_context_enabled"].item() == 1.0 for trace in traces)
+    assert any(
+        torch.linalg.vector_norm(
+            traces[i]["pointer_query"] - traces[j]["pointer_query"]
+        ).item() > 1e-4
+        for i in range(len(traces))
+        for j in range(i + 1, len(traces))
+    )

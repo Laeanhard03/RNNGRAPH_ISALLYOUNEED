@@ -459,3 +459,20 @@ A second concrete hypothesis is now tracked separately from repeated memory fusi
 
 The instrumentation commit is diagnostic only: it does not change the model transition, graph retrieval, selector, training data, or benchmark protocol. Use the resulting per-stage traces to distinguish early reset erasure, cumulative decay, and DANSN memory-fusion interference before testing a protected cue-bearing state or altering the gate equations.
 
+## Protected contextual-state experiment — v6
+
+The time-resolved v5 traces localize most cue collapse to ordinary recurrent processing during distractors, before DANSN persistent memory is available. Across seeds 7, 13, and 21, cue-conditioned hidden-state L2 separation fell from 1.532789 after the cue to 0.488843 after the first distractor, 0.000824 after the eighth distractor, and 0.000028 at the key. During distractors, effective DANSN memory injection is zero. The update gate averages about 0.90, leaving only a small old-state contribution in each recurrent transition. DANSN injection becomes strong later, at context/key, and may add further mixing but cannot explain the earlier collapse.
+
+The next experiment compares four transition variants with identical parameter shapes and the same contextual branch-selection protocol:
+
+- legacy: the existing transition, with reset-filtered previous hidden used in both candidate construction and carry interpolation.
+- standard_carry: reset filters the candidate's recurrent input, while the update interpolation carries the unfiltered previous hidden state.
+- protected_context: adds an independent slow-changing recurrent context state. It initializes directly from the first cue-bearing input, then uses a learned high-retention gate (bias initialized to 3.0) to blend previous context with each new token proposal. This state is excluded from DANSN memory fusion and contributes additively to the query used by the associative pointer.
+- protected_context_standard_carry: combines both changes.
+
+The protected channel is a testable architectural hypothesis, not a proven solution. Its purpose is to preserve a low-frequency contextual trace while the ordinary controller state continues processing distractors and DANSN remains free to retrieve/fuse persistent associations. A zero-state reset removes both recurrent paths, so reset-state diagnostics must remain in the benchmark.
+
+All variants instantiate the protected-context parameters so model parameter counts are comparable. Legacy and standard-carry modes do not use the protected channel at inference. The checkpoint marker advances to dansn_four_gate_gru_v6; v5 checkpoints are intentionally rejected to avoid loading a state dict with a different architecture.
+
+Acceptance requires pointer and counterfactual cue selection above 33.33% across all three seeds, positive target score margin, and lower performance when the protected recurrent state is removed. Report state-separation trajectories and candidate coverage alongside accuracy. This remains a synthetic mechanism benchmark, not evidence of language-level or semantic reasoning.
+

@@ -32,7 +32,7 @@ from persistent_dansn_rnn import (
 )
 
 
-FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v5"
+FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v6"
 GRAPH_EVIDENCE_SIZE = 5
 
 
@@ -41,12 +41,14 @@ class FourGateState(RecurrentState):
     """Recurrent state carrying the pre-target persistent-write gate."""
 
     write_gate: Optional[Tensor] = None
+    context_hidden: Optional[Tensor] = None
 
     def detached(self) -> "FourGateState":
         return FourGateState(
             None if self.hidden is None else self.hidden.detach(),
             None if self.readout is None else self.readout.detach(),
             None if self.write_gate is None else self.write_gate.detach(),
+            None if self.context_hidden is None else self.context_hidden.detach(),
         )
 
 
@@ -89,6 +91,7 @@ class DANSNFourGateCell(nn.Module):
         memory_available: bool | Tensor = True,
         memory_enabled: bool = True,
         write_enabled: bool = True,
+        standard_gru_carry: bool = False,
     ) -> tuple[Tensor, dict[str, Tensor]]:
         d = self.hidden_size
         if inputs.shape[-1] != d or previous_hidden.shape[-1] != d:
@@ -122,8 +125,11 @@ class DANSNFourGateCell(nn.Module):
             self.candidate_input(inputs)
             + self.candidate_hidden(reset_hidden)
         )
+        # Standard GRU interpolation carries the unfiltered previous state;
+        # reset filters only the recurrent input used by the candidate.
+        recurrent_carry = previous_hidden if standard_gru_carry else reset_hidden
         recurrent_hidden = (
-            (1.0 - update_gate) * reset_hidden
+            (1.0 - update_gate) * recurrent_carry
             + update_gate * candidate
         )
 
@@ -156,6 +162,7 @@ class DANSNFourGateCell(nn.Module):
             "candidate": candidate,
             "memory_proposal": memory_proposal,
             "recurrent_hidden": recurrent_hidden,
+            "recurrent_carry": recurrent_carry,
         }
         return hidden, gates
 
@@ -196,6 +203,7 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         structural_bias: float = 0.15,
         gate_ablation: str = "full",
         write_threshold: float = 0.01,
+        transition_variant: str = "legacy",
     ) -> None:
         # Construct the shared persistent DANSN graph reader and writer.
         super().__init__(
@@ -216,6 +224,14 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             )
         if not 0.0 <= float(write_threshold) < 1.0:
             raise ValueError("write_threshold must be in [0, 1)")
+        allowed_transition_variants = {
+            "legacy", "standard_carry", "protected_context",
+            "protected_context_standard_carry",
+        }
+        if transition_variant not in allowed_transition_variants:
+            raise ValueError(
+                f"transition_variant must be one of {sorted(allowed_transition_variants)}"
+            )
 
         # The parent experiment's three-gate cell and scalar-independent
         # write MLP are replaced by this four-output controller.
@@ -238,6 +254,20 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         self.output = nn.Linear(3 * hidden_size, vocab_size)
         self.gate_ablation = gate_ablation
         self.write_threshold = float(write_threshold)
+        self.transition_variant = transition_variant
+        self.standard_gru_carry = transition_variant in {
+            "standard_carry", "protected_context_standard_carry"
+        }
+        self.protected_context_enabled = transition_variant in {
+            "protected_context", "protected_context_standard_carry"
+        }
+        # Independent slow-changing state, separate from DANSN memory fusion.
+        # Instantiated in every variant to keep parameter counts identical.
+        self.context_input_projection = nn.Linear(hidden_size, hidden_size)
+        self.context_hidden_projection = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.context_retention_gate = nn.Linear(2 * hidden_size, hidden_size)
+        with torch.no_grad():
+            self.context_retention_gate.bias.fill_(3.0)
 
     def _graph_evidence(
         self,
@@ -286,6 +316,27 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
 
     def initial_state(self) -> FourGateState:
         return FourGateState()
+
+    def _update_protected_context(
+        self,
+        token_embedding: Tensor,
+        previous_context: Optional[Tensor],
+    ) -> tuple[Tensor, Tensor]:
+        """Update an independent, high-retention recurrent context channel."""
+        previous = torch.zeros_like(token_embedding) if previous_context is None else previous_context
+        proposal = torch.tanh(
+            self.context_input_projection(token_embedding)
+            + self.context_hidden_projection(previous)
+        )
+        retention = torch.sigmoid(self.context_retention_gate(
+            torch.cat((token_embedding, previous), dim=-1)
+        ))
+        if previous_context is None:
+            # Do not attenuate the first cue by blending it with an empty state.
+            updated = proposal
+        else:
+            updated = retention * previous + (1.0 - retention) * proposal
+        return updated, retention
 
     def _read_persistent_memory(
         self,
@@ -398,6 +449,15 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         token_embedding = self.embedding(token)
         zero = token_embedding.new_zeros(self.hidden_size)
         previous_hidden = state.hidden if state.hidden is not None else zero
+        previous_context = getattr(state, "context_hidden", None)
+        context_for_selection = (
+            previous_context
+            if self.protected_context_enabled and previous_context is not None
+            else zero
+        )
+        # The selector sees the temporary hidden state plus the protected
+        # contextual trace. The four-gate controller itself remains unchanged.
+        selection_hidden = previous_hidden + context_for_selection
 
         graph_readout, matched_path, active_paths = self._read_graph(
             token_embedding, previous_hidden, history
@@ -410,7 +470,7 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             pointer_scores,
             pointer_candidate_ids,
         ) = self._read_persistent_memory(
-            token_embedding, previous_hidden, matched_path, active_paths
+            token_embedding, selection_hidden, matched_path, active_paths
         )
         evidence = self._graph_evidence(matched_path, active_paths, token_embedding)
         if self.gate_ablation == "no_graph_evidence":
@@ -425,6 +485,7 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             memory_available=memory_available,
             memory_enabled=self.gate_ablation != "no_memory_injection",
             write_enabled=self.gate_ablation != "no_persistent_write",
+            standard_gru_carry=self.standard_gru_carry,
         )
         memory_output_context = (
             gates["effective_memory_mix"] * persistent_readout
@@ -448,10 +509,18 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         # The memory gate controls how much of this associative distribution is
         # blended with the GRU's learned vocabulary distribution.
         logits = torch.log(mixed_probabilities.clamp_min(1e-9))
+        if self.protected_context_enabled:
+            next_context, context_retention = self._update_protected_context(
+                token_embedding, previous_context
+            )
+        else:
+            next_context = None
+            context_retention = torch.zeros_like(token_embedding)
         next_state = FourGateState(
             hidden=hidden,
             readout=graph_readout,
             write_gate=gates["persistent_write_gate"],
+            context_hidden=next_context,
         )
         trace = {
             "matched_path": matched_path,
@@ -465,9 +534,20 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             "pointer_scores": pointer_scores,
             "pointer_candidate_ids": pointer_candidate_ids,
             "pointer_query": self.query_projection(
-                torch.cat((token_embedding, previous_hidden), dim=-1)
+                torch.cat((token_embedding, selection_hidden), dim=-1)
             ),
             "previous_hidden": previous_hidden,
+            "selection_hidden": selection_hidden,
+            "previous_context_hidden": (
+                previous_context if previous_context is not None else zero
+            ),
+            "protected_context_hidden": (
+                next_context if next_context is not None else zero
+            ),
+            "protected_context_retention_gate": context_retention,
+            "protected_context_enabled": token_embedding.new_tensor(
+                float(self.protected_context_enabled)
+            ),
             "effective_pointer_mix": pointer_mix,
             "pointer_available": pointer_available,
             "pointer_enabled": pointer_enabled,
@@ -580,6 +660,7 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
                 "vocab_size": self.embedding.num_embeddings,
                 "gate_ablation": self.gate_ablation,
                 "write_threshold": self.write_threshold,
+                "transition_variant": self.transition_variant,
             },
             "model": self.state_dict(),
             "node_memory": {
@@ -611,6 +692,8 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             raise ValueError("checkpoint gate_ablation does not match this model")
         if float(config.get("write_threshold", self.write_threshold)) != self.write_threshold:
             raise ValueError("checkpoint write_threshold does not match this model")
+        if config.get("transition_variant", "legacy") != self.transition_variant:
+            raise ValueError("checkpoint transition_variant does not match this model")
 
         self.load_state_dict(checkpoint["model"])
         self._rebuild_path_index()

@@ -391,6 +391,11 @@ def trace_query_trajectory(
             "hidden": hidden,
             "recurrent_hidden": trace["recurrent_hidden"].detach().clone(),
             "pointer_query": trace["pointer_query"].detach().clone(),
+            "selection_hidden": trace["selection_hidden"].detach().clone(),
+            "previous_context_hidden": trace["previous_context_hidden"].detach().clone(),
+            "protected_context_hidden": trace["protected_context_hidden"].detach().clone(),
+            "protected_context_retention_gate_mean": mean_value("protected_context_retention_gate"),
+            "protected_context_retention_gate_std": std_value("protected_context_retention_gate"),
             "reset_gate_mean": mean_value("reset_gate"),
             "reset_gate_std": std_value("reset_gate"),
             "update_gate_mean": mean_value("update_gate"),
@@ -408,6 +413,12 @@ def trace_query_trajectory(
                 torch.linalg.vector_norm(carried).cpu()
             ) / denominator,
             "hidden_norm": float(torch.linalg.vector_norm(hidden).cpu()),
+            "protected_context_norm": float(torch.linalg.vector_norm(
+                trace["protected_context_hidden"]
+            ).cpu()),
+            "selection_hidden_norm": float(torch.linalg.vector_norm(
+                trace["selection_hidden"]
+            ).cpu()),
             "recurrent_hidden_norm": float(
                 torch.linalg.vector_norm(trace["recurrent_hidden"]).cpu()
             ),
@@ -457,7 +468,11 @@ def collect_cue_trajectory_diagnostics(
         "hidden_memory_mix_mean",
         "memory_available",
         "persistent_write_gate_mean",
+        "protected_context_retention_gate_mean",
+        "protected_context_retention_gate_std",
         "reset_retention_ratio",
+        "protected_context_norm",
+        "selection_hidden_norm",
         "carry_retention_ratio",
         "hidden_norm",
         "recurrent_hidden_norm",
@@ -493,6 +508,9 @@ def collect_cue_trajectory_diagnostics(
                     "hidden_cosine", "hidden_l2",
                     "previous_hidden_cosine", "previous_hidden_l2",
                     "pointer_query_cosine", "pointer_query_l2",
+                    "selection_hidden_cosine", "selection_hidden_l2",
+                    "previous_context_hidden_cosine", "previous_context_hidden_l2",
+                    "protected_context_hidden_cosine", "protected_context_hidden_l2",
                     *gate_metrics,
                 )
             })
@@ -501,6 +519,9 @@ def collect_cue_trajectory_diagnostics(
                 ("hidden", "hidden"),
                 ("previous_hidden", "previous_hidden"),
                 ("pointer_query", "pointer_query"),
+                ("selection_hidden", "selection_hidden"),
+                ("previous_context_hidden", "previous_context_hidden"),
+                ("protected_context_hidden", "protected_context_hidden"),
             ):
                 metrics = _pairwise_vector_metrics([
                     row[source] for row in rows
@@ -827,6 +848,12 @@ def evaluate_model(
             sum(cue_state_distances) / max(len(cue_state_distances), 1)
         ),
         "cue_trajectory": cue_trajectory,
+        "mean_same_key_cross_cue_selection_l2": (
+            float(key_stage["selection_hidden_l2"]) if key_stage else 0.0
+        ),
+        "mean_same_key_cross_cue_context_l2": (
+            float(key_stage["previous_context_hidden_l2"]) if key_stage else 0.0
+        ),
         "graph_stats": model.graph_stats(),
     }
 
@@ -864,14 +891,19 @@ def run_one_seed(
     )
 
     systems = {
-        "four_gate_full": "full",
-        "four_gate_no_pointer": "no_pointer",
-        "four_gate_no_memory_injection": "no_memory_injection",
-        "four_gate_no_persistent_write": "no_persistent_write",
-        "four_gate_no_graph_evidence": "no_graph_evidence",
+        "four_gate_full": ("full", "legacy"),
+        "four_gate_standard_carry": ("full", "standard_carry"),
+        "four_gate_protected_context": ("full", "protected_context"),
+        "four_gate_protected_context_standard_carry": (
+            "full", "protected_context_standard_carry"
+        ),
+        "four_gate_no_pointer": ("no_pointer", "legacy"),
+        "four_gate_no_memory_injection": ("no_memory_injection", "legacy"),
+        "four_gate_no_persistent_write": ("no_persistent_write", "legacy"),
+        "four_gate_no_graph_evidence": ("no_graph_evidence", "legacy"),
     }
     results = {}
-    for system_name, ablation in systems.items():
+    for system_name, (ablation, transition_variant) in systems.items():
         # Identical initial weights across four-gate ablations for this seed.
         torch.manual_seed(int(seed) + 1701)
         brain = Brain(vocab=copy.deepcopy(dataset.brain.vocab))
@@ -885,6 +917,7 @@ def run_one_seed(
             max_active_nodes=128,
             max_memory_nodes=10_000,
             gate_ablation=ablation,
+            transition_variant=transition_variant,
         )
         optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
         train_metrics = [
@@ -902,6 +935,7 @@ def run_one_seed(
         results[system_name] = {
             **evaluation,
             "parameter_count": _parameter_count(model),
+            "transition_variant": transition_variant,
             "last_train_mean_loss": train_metrics[-1]["mean_nll"],
             "last_train_mean_pointer_loss": train_metrics[-1]["mean_pointer_loss"],
             "last_train_pointer_supervision_examples": train_metrics[-1]["pointer_supervision_examples"],
@@ -955,6 +989,8 @@ def run_benchmark(
         "mean_pointer_target_score_margin",
         "mean_same_key_cross_cue_cosine",
         "mean_same_key_cross_cue_l2",
+        "mean_same_key_cross_cue_selection_l2",
+        "mean_same_key_cross_cue_context_l2",
         "last_train_mean_loss",
         "last_train_mean_pointer_loss",
         "last_train_pointer_supervision_examples",
@@ -970,6 +1006,18 @@ def run_benchmark(
             ])
             for metric in metrics
         }
+        stage_rows = runs[0]["results"][system_name]["cue_trajectory"]["stages"]
+        summary[system_name]["stage_diagnostics"] = {}
+        for stage_index, stage_row in enumerate(stage_rows):
+            stage_summary = {"stage": stage_row["stage"]}
+            for metric_name in stage_row:
+                if metric_name in {"stage", "keys_measured"}:
+                    continue
+                stage_summary[metric_name] = _stats([
+                    float(run["results"][system_name]["cue_trajectory"]["stages"][stage_index][metric_name])
+                    for run in runs
+                ])
+            summary[system_name]["stage_diagnostics"][stage_row["stage"]] = stage_summary
 
     return {
         "task": (
@@ -981,8 +1029,14 @@ def run_benchmark(
             "seeds": seed_list,
             "candidate_branches_per_key": configuration.get("cue_count", 3),
             "pointer_loss_weight": configuration.get("pointer_loss_weight", 1.0),
+            "transition_variants": {
+                "legacy": "original four-gate transition with reset-filtered carry",
+                "standard_carry": "reset filters the candidate path; unfiltered previous hidden is retained in the update interpolation",
+                "protected_context": "adds an independent high-retention state to the associative selector query",
+                "protected_context_standard_carry": "combines protected context with standard GRU carry interpolation",
+            },
             "training": (
-                "train on multiple cue->value branches per training key; "
+                "train on multiple cue->value branches per training key; 
                 "query supervision requires using the cue to select among "
                 "already stored outgoing candidates; an auxiliary pointer "
                 "negative-log-probability loss is applied only when the correct "
@@ -1029,7 +1083,9 @@ def run_benchmark(
             "the decision. If no_pointer also succeeds, the recurrent state and "
             "memory-vector decoder can resolve branches without pointer copying. "
             "High reset-state accuracy would weaken the claim that recurrent cue "
-            "state is required. Do not infer general language or semantic reasoning."
+            "state is required. Standard-carry and protected-context variants isolate "
+            "carry semantics from an independent slow-changing context channel. "
+            "Do not infer general language or semantic reasoning."
         ),
     }
 

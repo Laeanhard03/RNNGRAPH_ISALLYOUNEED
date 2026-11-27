@@ -8,6 +8,7 @@ on:
       - "experiments/dansn_conditioned_gru_gates/contextual_branching.py"
       - "experiments/dansn_conditioned_gru_gates/test_contextual_branching.py"
       - "experiments/dansn_conditioned_gru_gates/four_gate.py"
+      - "experiments/dansn_conditioned_gru_gates/FOUR_GATE_ARCHITECTURE.md"
       - "experiments/dansn_conditioned_gru_gates/test_four_gate.py"
       - "persistent_dansn_rnn.py"
       - ".github/workflows/dansn-contextual-branching.yml"
@@ -75,6 +76,9 @@ jobs:
           )
           systems = [
               ("four_gate_full", "Four-gate full"),
+              ("four_gate_standard_carry", "Four-gate standard carry"),
+              ("four_gate_protected_context", "Four-gate protected context"),
+              ("four_gate_protected_context_standard_carry", "Protected context + standard carry"),
               ("four_gate_no_pointer", "Four-gate, no pointer"),
               ("four_gate_no_memory_injection", "Four-gate, no memory injection"),
               ("four_gate_no_persistent_write", "Four-gate, no persistent write"),
@@ -108,7 +112,7 @@ jobs:
               "",
               "The no-pointer control keeps memory-to-hidden and decoder-vector fusion active; it disables only the pointer probability mixture.",
               "",
-              "This is a synthetic mechanism test. Candidate count, pointer accuracy, cue counterfactuals, and reset-state diagnostics should be interpreted together.",
+              "Standard-carry changes only recurrent interpolation; protected-context variants add an independent slow-changing state to the selector query. This is a synthetic mechanism test. Candidate count, pointer accuracy, cue counterfactuals, and reset-state diagnostics should be interpreted together.",
           ]
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
               handle.write("\n".join(lines) + "\n")

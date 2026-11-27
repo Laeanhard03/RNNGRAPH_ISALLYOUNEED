@@ -222,7 +222,7 @@ def test_checkpoint_round_trip_preserves_four_gate_weights_and_memory():
         checkpoint = Path(tmp) / "four_gate.pt"
         model.save_checkpoint(checkpoint)
         saved = torch.load(checkpoint, map_location="cpu", weights_only=True)
-        assert saved["architecture"] == "dansn_four_gate_gru_v5"
+        assert saved["architecture"] == "dansn_four_gate_gru_v6"
         restored = make_model(brain)
         restored.load_checkpoint(checkpoint)
 
@@ -704,3 +704,76 @@ def test_saturated_memory_gate_preserves_a_recurrent_residual():
     # previous recurrent state while moving toward the retrieved memory.
     assert torch.all(hidden > 0.0)
     assert torch.all(hidden < previous)
+
+
+def test_standard_gru_carry_does_not_apply_reset_gate_to_interpolation():
+    torch.manual_seed(47)
+    cell = DANSNFourGateCell(hidden_size=8)
+    with torch.no_grad():
+        cell.controller.weight.zero_()
+        cell.controller.bias.zero_()
+        cell.controller.bias[2 * 8:3 * 8].fill_(-20.0)
+        cell.candidate_input.weight.zero_()
+        cell.candidate_input.bias.zero_()
+        cell.candidate_hidden.weight.zero_()
+        cell.memory_projection.weight.zero_()
+
+    inputs = torch.zeros(8)
+    previous = torch.ones(8)
+    memory = torch.zeros(8)
+    evidence = torch.zeros(5)
+    legacy, _ = cell(inputs, previous, memory, evidence, memory_available=False)
+    standard, _ = cell(
+        inputs, previous, memory, evidence,
+        memory_available=False, standard_gru_carry=True,
+    )
+    assert torch.allclose(legacy, torch.full_like(legacy, 0.25), atol=1e-5)
+    assert torch.allclose(standard, torch.full_like(standard, 0.5), atol=1e-5)
+
+
+def test_protected_context_channel_retains_cue_across_distractors():
+    torch.manual_seed(53)
+    brain, ids = make_brain_and_stream()
+    model = make_model(brain, transition_variant="protected_context")
+    state = model.initial_state()
+    _logits, state, _cue_trace = model.forward_step(ids[0], [ids[0]], state)
+    initial_context = state.context_hidden.detach().clone()
+    for token in [ids[1], ids[2], ids[3], ids[4]] * 2:
+        _logits, state, trace = model.forward_step(token, [token], state)
+    assert state.context_hidden is not None
+    assert torch.isfinite(state.context_hidden).all()
+    assert trace["protected_context_retention_gate"].mean().item() > 0.9
+    assert torch.linalg.vector_norm(state.context_hidden).item() > 0.0
+    assert not torch.allclose(state.context_hidden, state.hidden)
+    assert torch.linalg.vector_norm(state.context_hidden - initial_context).item() < 3.0
+
+
+def test_protected_context_is_carried_and_detached_with_recurrent_state():
+    torch.manual_seed(59)
+    brain, ids = make_brain_and_stream()
+    model = make_model(brain, transition_variant="protected_context")
+    _, state, _ = model.forward_step(ids[0], [ids[0]])
+    assert state.context_hidden is not None
+    state.context_hidden.requires_grad_(True)
+    detached = state.detached()
+    assert detached.context_hidden is not None
+    assert detached.context_hidden.requires_grad is False
+
+
+def test_protected_context_checkpoint_round_trip_preserves_variant():
+    torch.manual_seed(61)
+    brain, ids = make_brain_and_stream()
+    model = make_model(brain, transition_variant="protected_context_standard_carry")
+    _, state, _ = model.forward_step(ids[0], [ids[0]])
+    assert state.context_hidden is not None
+
+    with tempfile.TemporaryDirectory() as tmp:
+        checkpoint = Path(tmp) / "protected_context.pt"
+        model.save_checkpoint(checkpoint)
+        restored = make_model(
+            brain, transition_variant="protected_context_standard_carry"
+        )
+        restored.load_checkpoint(checkpoint)
+    for key, value in model.state_dict().items():
+        assert torch.equal(restored.state_dict()[key], value)
+    assert restored.transition_variant == "protected_context_standard_carry"
