@@ -174,6 +174,9 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         "no_memory_injection",
         "no_persistent_write",
         "no_graph_evidence",
+        # Disable only the direct vocabulary pointer. Persistent vectors still
+        # enter the recurrent hidden state and the decoder's memory skip path.
+        "no_pointer",
     }
 
     def __init__(
@@ -405,9 +408,11 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             (hidden, graph_readout, memory_output_context), dim=-1
         ))
         neural_probabilities = torch.softmax(neural_logits, dim=-1)
+        pointer_enabled = self.gate_ablation != "no_pointer"
         pointer_mix = (
             gates["effective_memory_mix"].mean()
-            if pointer_available else neural_logits.new_zeros(())
+            if pointer_available and pointer_enabled
+            else neural_logits.new_zeros(())
         )
         mixed_probabilities = (
             (1.0 - pointer_mix) * neural_probabilities
@@ -434,6 +439,7 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             "persistent_token_distribution": persistent_token_distribution,
             "effective_pointer_mix": pointer_mix,
             "pointer_available": pointer_available,
+            "pointer_enabled": pointer_enabled,
             "graph_evidence": evidence,
             **gates,
         }
