@@ -76,7 +76,7 @@ def generate_dataset(
     cue_count: int = 3,
     value_count: int = 12,
     train_episodes: int = 4,
-    train_delay: int = 3,
+    train_delay: int = 8,
     test_delay: int = 8,
 ) -> ContextualBranchDataset:
     """Create train mappings and one-shot multi-branch held-out associations."""
@@ -189,6 +189,7 @@ def generate_dataset(
         "training_episodes": int(train_episodes),
         "train_query_delay_max": int(train_delay),
         "test_query_delay": int(test_delay),
+        "test_delay_is_within_training_range": int(test_delay) <= int(train_delay),
         "train_token_count": len(train_tokens),
         "heldout_support_count": len(test_supports),
         "heldout_query_count": len(queries),
@@ -417,7 +418,7 @@ def run_one_seed(
     cue_count: int = 3,
     value_count: int = 12,
     train_episodes: int = 4,
-    train_delay: int = 3,
+    train_delay: int = 8,
     test_delay: int = 8,
 ) -> dict:
     if min(epochs, hidden_size, chunk_size) < 1:
@@ -623,7 +624,7 @@ def main() -> None:
     parser.add_argument("--cue-count", type=int, default=3)
     parser.add_argument("--value-count", type=int, default=12)
     parser.add_argument("--train-episodes", type=int, default=4)
-    parser.add_argument("--train-delay", type=int, default=3)
+    parser.add_argument("--train-delay", type=int, default=8)
     parser.add_argument("--test-delay", type=int, default=8)
     parser.add_argument(
         "--output",
