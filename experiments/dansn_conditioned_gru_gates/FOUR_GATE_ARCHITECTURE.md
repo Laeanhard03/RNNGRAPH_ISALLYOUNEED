@@ -297,3 +297,19 @@ The contextual benchmark now includes an auxiliary ranking objective at marked t
 A new training-position test checks that the supervised current token is the key and the next token is its stored target. A gradient test checks that selector training updates the query projection. The first CI attempt found that the trainer accidentally inherited an evaluation-only \`no_grad\` decorator. This was corrected in commit \`cc03c3b870ecf30e39c7ec483bdf9b4d83175cc4\`.
 
 Corrected Actions run [45919882859](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45919882859) has passed dependency installation and the complete experiment test step. Its three-seed benchmark is still running; no performance improvement is claimed yet.
+
+## Selector-supervision audit and corrected graph-context protocol — 2026-11-27
+
+The completed auxiliary-selector benchmark [45919882859](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45919882859) passed CI, but artifact 15164019295 revealed that the new loss had **zero eligible pointer-supervision examples** in every system and all three seeds. Mean pointer loss was 0.0 and supervised-example count was 0. Therefore that benchmark did not actually test the intended auxiliary ranking objective; its accuracy must not be interpreted as evidence for or against the ranking loss.
+
+The data-path audit found that the cue was being included in the same linear graph history that formed persistent DANSN paths. The intended task requires the cue to influence only the recurrent hidden state, while all answer continuations for a key share the DANSN parent (context,key). The earlier flat-history stream did not enforce this separation consistently.
+
+Corrective implementation on the existing branch:
+
+- Training data is now stored as independent recurrent episodes/events, each carrying an explicit DANSN graph-history key separately from the recurrent input sequence.
+- In support episodes, the model processes cue → context → key through recurrence, while DANSN graph histories are respectively [cue], [context], and [context,key]. Only after the key prediction is scored is the support value written under (context,key,value).
+- In query episodes, the recurrent state processes cue and distractors before context and key. At the key lookup, DANSN receives only (context,key), so all three values are direct candidates under one shared parent.
+- Held-out support ingestion and evaluation now use the same separation. Reset-state diagnostics preserve the same graph-history path while removing the recurrent cue state.
+- Training logs pointer candidate count and the number of truly supervised selector examples. The tests now require the expected number of eligible examples and exactly three candidates at those query positions; they also verify that all cue branches share the same stored DANSN parent path.
+
+Corrected validation was triggered on commits 5332745b91c9c5ec1b6733ef9fce34b3695e3996 and d3c38993cb7e2ff77555a72341fb1adcb70a68f7. Actions runs [45925675394](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45925675394) and [45925700464](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45925700464) are the contextual benchmark validations; results are pending at the time this note was written. Do not make a new performance claim until an artifact shows nonzero selector-supervision examples and candidate count three at training query positions.
