@@ -655,3 +655,43 @@ def test_no_pointer_ablation_preserves_memory_fusion_and_decoder_skip():
         logits,
         torch.log(trace["neural_probabilities"].clamp_min(1e-9)),
     )
+
+
+def test_saturated_memory_gate_preserves_a_recurrent_residual():
+    """An open DANSN gate must enrich, not erase, the carried hidden state."""
+    hidden_size = 4
+    cell = DANSNFourGateCell(hidden_size=hidden_size)
+    with torch.no_grad():
+        cell.controller.weight.zero_()
+        cell.controller.bias.zero_()
+        cell.controller.bias[:hidden_size].fill_(-20.0)  # hold recurrent state
+        cell.controller.bias[hidden_size:2 * hidden_size].fill_(20.0)
+        cell.controller.bias[2 * hidden_size:3 * hidden_size].fill_(20.0)
+        cell.controller.bias[3 * hidden_size:].fill_(-20.0)
+        cell.candidate_input.weight.zero_()
+        cell.candidate_input.bias.zero_()
+        cell.candidate_hidden.weight.zero_()
+        cell.memory_projection.weight.copy_(torch.eye(hidden_size))
+
+    previous = torch.ones(hidden_size)
+    memory = -torch.ones(hidden_size)
+    hidden, gates = cell(
+        torch.zeros(hidden_size),
+        previous,
+        memory,
+        torch.zeros(cell.evidence_size),
+        memory_available=True,
+    )
+
+    assert torch.allclose(
+        gates["effective_memory_mix"], torch.ones(hidden_size), atol=1e-6
+    )
+    assert torch.allclose(
+        gates["hidden_memory_mix"],
+        torch.full((hidden_size,), 0.5),
+        atol=1e-6,
+    )
+    # Both sources affect the transition: hidden remains aligned with the
+    # previous recurrent state while moving toward the retrieved memory.
+    assert torch.all(hidden > 0.0)
+    assert torch.all(hidden < previous)
