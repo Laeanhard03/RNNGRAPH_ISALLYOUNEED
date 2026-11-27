@@ -490,3 +490,18 @@ Version 7 expands the persistent writer input to [ordinary hidden state; protect
 
 The benchmark retains the v6 query-only protected-context variants as controls, so the effect of adding context to candidate storage can be isolated. The checkpoint marker advances to dansn_four_gate_gru_v7. The new tests verify that candidate vectors change when only the protected write context changes and that query-only mode keeps candidate writes context-blind. No selection improvement is claimed until the multi-seed artifact is inspected.
 
+## Query-aligned persistent candidate writes — v8
+
+The v7 artifact exposed a temporal asymmetry in the write/read interface. At the key step, `forward_step()` scores the persistent pointer using the pre-key state: `previous_hidden + previous_context`. It then advances both recurrent states with the current key token and returns the post-key state. `observe_target()` runs after scoring and, in v7, wrote the post-key `hidden` and post-key protected context into the candidate vector. The query therefore compared a pre-key representation against candidate features that included an additional key-state transition. This may be especially harmful for held-out key identities, which have no learned cue-to-branch associations.
+
+Version 8 adds two controlled variants:
+
+- `protected_context_query_aligned_write`
+- `protected_context_query_aligned_write_standard_carry`
+
+During each `forward_step()`, the returned state carries snapshots of the exact pre-token hidden and protected-context vectors that were supplied to the pointer query. After target reveal, the query-aligned variants use those snapshots for the first two persistent writer inputs. The target embedding and graph readout remain the same support-time values. The v7 post-token write variants remain in the benchmark as controls, and the original four-gate path is unchanged.
+
+A focused regression test checks that the write snapshot equals the query's pre-key hidden/context values and that the resulting persistent vector is exactly the writer output from those same inputs. The checkpoint marker advances to `dansn_four_gate_gru_v8`.
+
+The v7 three-seed result showed 100% seen-key selector accuracy but only 22.22% held-out pointer/counterfactual accuracy for context-aware writes; target score margin was -3.72. The query-only protected-context control was 27.78% held-out and 100% seen-key, while the original model remained at chance. These results indicate a severe seen/held-out gap, not a solved branch-selection task. V8 tests whether matching the stored candidate representation to the actual query time point reduces that mismatch. It remains a hypothesis until the next three-seed benchmark is inspected.
+

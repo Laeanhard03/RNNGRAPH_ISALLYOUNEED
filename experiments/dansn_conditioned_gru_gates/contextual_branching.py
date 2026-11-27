@@ -987,6 +987,12 @@ def run_one_seed(
         "four_gate_protected_context_write_standard_carry": (
             "full", "protected_context_write_standard_carry"
         ),
+        "four_gate_protected_context_query_aligned_write": (
+            "full", "protected_context_query_aligned_write"
+        ),
+        "four_gate_protected_context_query_aligned_write_standard_carry": (
+            "full", "protected_context_query_aligned_write_standard_carry"
+        ),
         "four_gate_no_pointer": ("no_pointer", "legacy"),
         "four_gate_no_memory_injection": ("no_memory_injection", "legacy"),
         "four_gate_no_persistent_write": ("no_persistent_write", "legacy"),
@@ -1147,6 +1153,8 @@ def run_benchmark(
                 "protected_context_standard_carry": "query-only protected context plus standard GRU carry interpolation",
                 "protected_context_write": "protected context is stored in persistent candidate vectors and used in selector queries",
                 "protected_context_write_standard_carry": "context-aware candidate writes plus standard GRU carry interpolation",
+                "protected_context_query_aligned_write": "stores the pre-key hidden/context state used by the pointer query",
+                "protected_context_query_aligned_write_standard_carry": "query-aligned candidate writes plus standard GRU carry interpolation",
             },
             "training": (
                 "train on multiple cue->value branches per training key; "

@@ -222,7 +222,7 @@ def test_checkpoint_round_trip_preserves_four_gate_weights_and_memory():
         checkpoint = Path(tmp) / "four_gate.pt"
         model.save_checkpoint(checkpoint)
         saved = torch.load(checkpoint, map_location="cpu", weights_only=True)
-        assert saved["architecture"] == "dansn_four_gate_gru_v7"
+        assert saved["architecture"] == "dansn_four_gate_gru_v8"
         restored = make_model(brain)
         restored.load_checkpoint(checkpoint)
 

@@ -32,7 +32,7 @@ from persistent_dansn_rnn import (
 )
 
 
-FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v7"
+FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v8"
 GRAPH_EVIDENCE_SIZE = 5
 
 
@@ -42,6 +42,9 @@ class FourGateState(RecurrentState):
 
     write_gate: Optional[Tensor] = None
     context_hidden: Optional[Tensor] = None
+    # Snapshot of the exact pre-token state used to form the associative query.
+    write_query_hidden: Optional[Tensor] = None
+    write_query_context: Optional[Tensor] = None
 
     def detached(self) -> "FourGateState":
         return FourGateState(
@@ -49,6 +52,8 @@ class FourGateState(RecurrentState):
             None if self.readout is None else self.readout.detach(),
             None if self.write_gate is None else self.write_gate.detach(),
             None if self.context_hidden is None else self.context_hidden.detach(),
+            None if self.write_query_hidden is None else self.write_query_hidden.detach(),
+            None if self.write_query_context is None else self.write_query_context.detach(),
         )
 
 
@@ -228,6 +233,8 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             "legacy", "standard_carry", "protected_context",
             "protected_context_standard_carry", "protected_context_write",
             "protected_context_write_standard_carry",
+            "protected_context_query_aligned_write",
+            "protected_context_query_aligned_write_standard_carry",
         }
         if transition_variant not in allowed_transition_variants:
             raise ValueError(
@@ -259,13 +266,22 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         self.standard_gru_carry = transition_variant in {
             "standard_carry", "protected_context_standard_carry",
             "protected_context_write_standard_carry",
+            "protected_context_query_aligned_write_standard_carry",
         }
         self.protected_context_enabled = transition_variant in {
             "protected_context", "protected_context_standard_carry",
             "protected_context_write", "protected_context_write_standard_carry",
+            "protected_context_query_aligned_write",
+            "protected_context_query_aligned_write_standard_carry",
         }
         self.context_write_enabled = transition_variant in {
             "protected_context_write", "protected_context_write_standard_carry",
+            "protected_context_query_aligned_write",
+            "protected_context_query_aligned_write_standard_carry",
+        }
+        self.query_aligned_write_enabled = transition_variant in {
+            "protected_context_query_aligned_write",
+            "protected_context_query_aligned_write_standard_carry",
         }
         # Expand the inherited writer to accept a context vector while
         # preserving the original hidden/target/readout projections.
@@ -542,6 +558,10 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             readout=graph_readout,
             write_gate=gates["persistent_write_gate"],
             context_hidden=next_context,
+            # Candidate writes run after target reveal, but must snapshot the
+            # exact pre-token state that was used for pointer scoring.
+            write_query_hidden=previous_hidden,
+            write_query_context=context_for_selection,
         )
         trace = {
             "matched_path": matched_path,
@@ -647,6 +667,14 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         readout = state.readout if state.readout is not None else zero
         target = torch.tensor(target_id, dtype=torch.long, device=self.device)
         context_hidden = getattr(state, "context_hidden", None)
+        if self.query_aligned_write_enabled:
+            # The pointer was scored from the pre-token state. Store that exact
+            # query-time hidden/context pair, not the post-key recurrent state.
+            query_hidden = getattr(state, "write_query_hidden", None)
+            query_context = getattr(state, "write_query_context", None)
+            if query_hidden is not None:
+                hidden = query_hidden
+            context_hidden = query_context
         if context_hidden is None or not self.context_write_enabled:
             context_hidden = zero
         write_input = torch.cat(

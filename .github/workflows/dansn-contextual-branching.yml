@@ -81,6 +81,8 @@ jobs:
               ("four_gate_protected_context_standard_carry", "Protected context + standard carry"),
               ("four_gate_protected_context_write", "Context-aware candidate writes"),
               ("four_gate_protected_context_write_standard_carry", "Context-aware writes + standard carry"),
+              ("four_gate_protected_context_query_aligned_write", "Query-aligned context writes"),
+              ("four_gate_protected_context_query_aligned_write_standard_carry", "Query-aligned writes + standard carry"),
               ("four_gate_no_pointer", "Four-gate, no pointer"),
               ("four_gate_no_memory_injection", "Four-gate, no memory injection"),
               ("four_gate_no_persistent_write", "Four-gate, no persistent write"),
@@ -96,7 +98,9 @@ jobs:
               ("mean_pointer_candidate_count", "Candidates/query"),
               ("mean_effective_memory_mix", "Memory mix"),
               ("mean_effective_pointer_mix", "Pointer mix"),
+              ("mean_pointer_target_score_margin", "Target score margin"),
               ("persistent_vector_write_coverage", "Support write coverage"),
+              ("persistent_vector_query_coverage", "Query coverage"),
           ]
           lines = [
               "## Context-dependent multi-branch recall",
@@ -116,7 +120,7 @@ jobs:
               "",
               "The no-pointer control keeps memory-to-hidden and decoder-vector fusion active; it disables only the pointer probability mixture.",
               "",
-              "Standard-carry changes only recurrent interpolation; protected-context variants add an independent slow-changing state to the selector query. This is a synthetic mechanism test. Candidate count, pointer accuracy, cue counterfactuals, and reset-state diagnostics should be interpreted together.",
+              "Standard-carry changes only recurrent interpolation. Query-aligned context-write variants store the pre-key hidden/context state used by the pointer query, not the post-key recurrent state. This is a synthetic mechanism test. Candidate count, pointer accuracy, cue counterfactuals, score margins, and reset-state diagnostics should be interpreted together.",
           ]
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
               handle.write("\n".join(lines) + "\n")

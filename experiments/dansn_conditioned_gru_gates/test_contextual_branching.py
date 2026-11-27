@@ -592,3 +592,76 @@ def test_context_write_variant_ingests_cue_bearing_candidate_vectors():
     )
     assert trace["context_write_enabled"].item() == 1.0
     assert torch.count_nonzero(trace["persistent_token_distribution"]).item() == 3
+
+def test_query_aligned_candidate_write_stores_the_pre_key_query_state():
+    """The persistent candidate must describe the state used to score its edge."""
+    torch.manual_seed(293)
+    dataset = generate_dataset(
+        seed=293,
+        train_keys=6,
+        heldout_keys=2,
+        cue_count=3,
+        value_count=8,
+        train_episodes=1,
+        train_delay=2,
+        test_delay=3,
+    )
+    baseline = _make_model(dataset)
+    model = DANSNFourGateGRU(
+        baseline.engine,
+        baseline.embedding.num_embeddings,
+        hidden_size=baseline.hidden_size,
+        window_size=baseline.window_size,
+        graph_depth=baseline.graph_depth,
+        message_rounds=baseline.message_rounds,
+        max_active_nodes=baseline.max_active_nodes,
+        max_memory_nodes=baseline.max_memory_nodes,
+        transition_variant="protected_context_query_aligned_write",
+    )
+    with torch.no_grad():
+        model.four_gate_cell.controller.weight.zero_()
+        model.four_gate_cell.controller.bias.zero_()
+        model.four_gate_cell.controller.bias[
+            3 * model.hidden_size:4 * model.hidden_size
+        ].fill_(20.0)
+        model.four_gate_cell.controller.bias[
+            2 * model.hidden_size:3 * model.hidden_size
+        ].fill_(2.0)
+
+    query = dataset.queries[0]
+    state = model.initial_state()
+    for token_id, graph_history in [
+        (query.cue_id, (query.cue_id,)),
+        (dataset.context_id, (dataset.context_id,)),
+        (query.key_id, (dataset.context_id, query.key_id)),
+    ]:
+        _logits, state, trace = model.forward_step(
+            int(token_id), graph_history, state
+        )
+
+    assert trace["context_write_enabled"].item() == 1.0
+    assert state.write_query_hidden is not None
+    assert state.write_query_context is not None
+    assert torch.equal(state.write_query_hidden, trace["previous_hidden"])
+    assert torch.equal(
+        state.write_query_context, trace["previous_context_hidden"]
+    )
+
+    target_id = int(query.target_id)
+    expected_input = torch.cat((
+        trace["previous_hidden"],
+        trace["previous_context_hidden"],
+        model.embedding(torch.tensor(target_id, dtype=torch.long)),
+        state.readout,
+    ))
+    expected_candidate = model.memory_norm(
+        torch.tanh(model.write_candidate(expected_input))
+    )
+    model.observe_target(
+        (dataset.context_id, query.key_id), target_id, state
+    )
+    stored = model.node_memory[
+        (dataset.context_id, query.key_id, target_id)
+    ]
+    assert torch.allclose(stored, expected_candidate, atol=1e-6, rtol=1e-6)
+
