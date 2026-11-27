@@ -1036,7 +1036,7 @@ def run_benchmark(
                 "protected_context_standard_carry": "combines protected context with standard GRU carry interpolation",
             },
             "training": (
-                "train on multiple cue->value branches per training key; 
+                "train on multiple cue->value branches per training key; "
                 "query supervision requires using the cue to select among "
                 "already stored outgoing candidates; an auxiliary pointer "
                 "negative-log-probability loss is applied only when the correct "
