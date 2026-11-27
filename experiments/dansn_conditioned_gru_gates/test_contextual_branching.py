@@ -106,6 +106,13 @@ def test_same_key_exposes_multiple_persistent_pointer_candidates():
     assert trace["pointer_available"] is True
     assert torch.count_nonzero(pointer).item() == 3
     assert torch.isclose(pointer.sum(), torch.tensor(1.0), atol=1e-6)
+    assert trace["pointer_scores"].shape == (3,)
+    assert trace["pointer_candidate_ids"].shape == (3,)
+    assert set(trace["pointer_candidate_ids"].tolist()) == {
+        value for _cue, support_key, value in dataset.test_supports
+        if support_key == query.key_id
+    }
+    assert trace["previous_hidden"].shape == (model.hidden_size,)
     for _cue, key_id, value_id in dataset.test_supports:
         if key_id == query.key_id:
             assert (dataset.context_id, key_id, value_id) in trace[
@@ -306,4 +313,78 @@ def test_selector_loss_is_not_diluted_by_unrelated_token_events():
     )
     assert torch.allclose(
         nll_losses[0].grad, torch.tensor(1.0 / 64), atol=1e-6
+    )
+
+
+def test_nonlinear_pointer_scorer_receives_candidate_ranking_gradient():
+    torch.manual_seed(263)
+    dataset = generate_dataset(
+        seed=263,
+        train_keys=6,
+        heldout_keys=2,
+        cue_count=3,
+        value_count=8,
+        train_episodes=1,
+        train_delay=2,
+        test_delay=3,
+    )
+    model = _make_model(dataset)
+    ingest_heldout_supports(model, dataset)
+    query = dataset.queries[0]
+    state = model.initial_state()
+    events = [
+        (query.cue_id, (query.cue_id,)),
+        *[(int(token), (int(token),)) for token in query.distractor_ids],
+        (dataset.context_id, (dataset.context_id,)),
+        (query.key_id, (dataset.context_id, query.key_id)),
+    ]
+    trace = None
+    for token_id, graph_history in events:
+        _logits, state, trace = model.forward_step(
+            int(token_id), graph_history, state
+        )
+
+    assert trace is not None
+    assert trace["pointer_available"] is True
+    pointer = trace["persistent_token_distribution"]
+    assert pointer[query.target_id].item() > 0.0
+    selector_loss = -torch.log(pointer[query.target_id].clamp_min(1e-9))
+    selector_loss.backward()
+
+    scorer_gradient = model.pointer_scorer[0].weight.grad
+    assert scorer_gradient is not None
+    assert torch.isfinite(scorer_gradient).all()
+    assert torch.linalg.vector_norm(scorer_gradient).item() > 0.0
+
+
+def test_recurrent_query_state_is_traceable_and_cue_sensitive():
+    torch.manual_seed(269)
+    dataset = generate_dataset(
+        seed=269,
+        train_keys=6,
+        heldout_keys=2,
+        cue_count=3,
+        value_count=8,
+        train_episodes=1,
+        train_delay=2,
+        test_delay=3,
+    )
+    model = _make_model(dataset)
+    ingest_heldout_supports(model, dataset)
+    key_id = dataset.queries[0].key_id
+    distractors = dataset.queries[0].distractor_ids
+    cue_ids = sorted({cue for cue, support_key, _value in dataset.test_supports
+                      if support_key == key_id})
+    states = []
+    for cue_id in cue_ids:
+        _logits, _history, trace = _run_query(
+            model, dataset, cue_id, key_id, distractors
+        )
+        states.append(trace["previous_hidden"])
+    assert len(states) == 3
+    assert all(torch.isfinite(state).all() for state in states)
+    assert any(
+        torch.linalg.vector_norm(states[i] - states[j]).item() > 1e-6
+        for i in range(len(states))
+        for j in range(i + 1, len(states))
     )
