@@ -356,7 +356,11 @@ def train_contextual_stream(
         raise ValueError("pointer_loss_weight must be non-negative")
     model._validate_ids(dataset.train_tokens)
 
-    chunk_losses = []
+    # Keep the two objectives separately normalized. Selector supervision
+    # applies only to a minority of events; averaging (NLL + selector loss)
+    # across every event would dilute its gradient by the query-event fraction.
+    chunk_nll_losses = []
+    chunk_pointer_losses = []
     observed_nll = []
     observed_pointer_losses = []
     combined_losses = []
@@ -396,10 +400,16 @@ def train_contextual_stream(
                     )
                     pointer_supervision_examples += 1
 
-            combined_loss = nll_loss + pointer_loss_weight * selector_loss
-            chunk_losses.append(combined_loss)
+            chunk_nll_losses.append(nll_loss)
+            if selector_loss.requires_grad and float(
+                selector_loss.detach().cpu()
+            ) > 0.0:
+                chunk_pointer_losses.append(selector_loss)
             observed_nll.append(float(nll_loss.detach().cpu()))
-            combined_losses.append(float(combined_loss.detach().cpu()))
+            combined_losses.append(float(
+                nll_loss.detach().cpu()
+                + pointer_loss_weight * selector_loss.detach().cpu()
+            ))
 
             # Both ordinary next-token loss and candidate-ranking loss are
             # computed before the target is revealed to persistent DANSN memory.
@@ -407,15 +417,21 @@ def train_contextual_stream(
                 model.observe_target(graph_history, int(target), state)
             event_index += 1
 
-            if len(chunk_losses) >= chunk_size or event_index == total_events:
-                torch.stack(chunk_losses).mean().backward()
+            if len(chunk_nll_losses) >= chunk_size or event_index == total_events:
+                chunk_loss = torch.stack(chunk_nll_losses).mean()
+                if chunk_pointer_losses:
+                    chunk_loss = chunk_loss + pointer_loss_weight * torch.stack(
+                        chunk_pointer_losses
+                    ).mean()
+                chunk_loss.backward()
                 if grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 state = state.detached()
                 model.detach_memory()
-                chunk_losses.clear()
+                chunk_nll_losses.clear()
+                chunk_pointer_losses.clear()
                 updates += 1
 
     return {
