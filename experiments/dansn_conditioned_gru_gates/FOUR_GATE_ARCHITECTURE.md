@@ -228,3 +228,34 @@ Critical interpretation:
 - Each query had exactly one persistent outgoing answer candidate (pointer candidate count 1). This is a controlled one-shot key/value recall task, not yet ambiguous multi-branch disambiguation, multi-hop reasoning, free-form language, or abstract semantic learning.
 
 Result artifacts: GitHub Actions artifact `dansn-associative-recall-results`, artifact ID 15154461731. Full run/JSON and data can be downloaded from the workflow page. Do not generalize the 100% result beyond the tested single-candidate delayed-association setting.
+
+
+## Context-dependent multi-branch recall — first result and matched-delay follow-up
+
+A harder task stores three different value continuations under the same \`(branchctx, key)\` parent. The model receives a cue, then distractors, then the shared context and key. The query target is not part of the input. Each held-out key has three one-shot support writes. The recurrent state is reset at each query start, while persistent DANSN memory is retained. The evaluation also changes the cue for the same key (counterfactual branch switch) and repeats the key lookup with the recurrent state zeroed.
+
+The no-pointer ablation disables only the vocabulary-pointer probability mixture; it retains DANSN vector fusion into the recurrent hidden state and decoder skip channel. This isolates direct pointer copying from the vector-memory route.
+
+### First three-seed result — delay mismatch
+
+The initial benchmark [completed successfully in Actions run 45917748328](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45917748328), with artifact ID 15163315694. It used 16 training keys, 8 held-out keys, 3 cues/branches per key, 12 value classes, 4 training episodes, and 72 held-out queries across seeds 7/13/21. Every query exposed exactly 3 persistent pointer candidates.
+
+| Metric | Full V4 | No pointer | No memory injection | No persistent write | No graph evidence |
+|---|---:|---:|---:|---:|---:|
+| Output top-1 | 33.33% | 6.94% | 20.83% | 8.33% | 33.33% |
+| Value-only top-1 | 33.33% | 13.89% | 20.83% | 9.72% | 33.33% |
+| Raw pointer top-1 | 33.33% | 33.33% | 33.33% | 0% | 33.33% |
+| Counterfactual cue selection | 31.94% | 31.94% | 33.33% | 0% | 31.94% |
+| Pointer top-1 with hidden state reset | 33.33% | 33.33% | 33.33% | 0% | 33.33% |
+
+Full V4 wrote and retrieved all held-out vectors (100% coverage), with a mean of 3 candidates/query and mean pointer target probability 0.3318. But selection remained at the 3-way chance rate (33.33%). Changing the cue did not reliably switch the chosen branch (31.94%), resetting the recurrent state did not reduce pointer accuracy (33.33%), and the carried-state target-probability gain was -0.0015. This run therefore demonstrates multi-branch storage and retrieval coverage, but **does not demonstrate cue-conditioned selection or a useful recurrent-state contribution**.
+
+The no-pointer system's output top-1 was 6.94%; therefore the vector-to-hidden and decoder-vector routes did not independently solve branch selection in this configuration. No-graph-evidence matched full V4, so the graph-evidence vector is still not demonstrated to help here. No-persistent-write produced no candidates, as expected.
+
+### Delay-distribution confound and corrected run
+
+The first benchmark trained with distractor gaps up to 3 tokens but evaluated at 8 tokens. The cue therefore had to survive a longer, unseen delay. This makes the first result an out-of-distribution delay test rather than a clean matched-delay test.
+
+The script's default maximum training delay has now been changed to 8 tokens, matching the evaluation delay. Dataset metadata records whether the test delay is inside the training range, and a regression test protects the default. The model architecture and ablation definitions are unchanged. The matched-delay rerun is [Actions run 45918540578](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45918540578); a duplicate run at the latest test commit is [Actions run 45918553271](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45918553271). Results are pending at the time of this edit.
+
+The expanded test suite passed **46 tests, 1 warning in 3.95s**. Do not interpret the first run as a definitive architecture failure until the matched-delay benchmark completes. Even a successful matched-delay result would remain a synthetic three-branch task, not evidence of general language or semantic reasoning.
