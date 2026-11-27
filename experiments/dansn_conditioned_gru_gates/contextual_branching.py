@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Sequence
 
 import torch
+import torch.nn.functional as F
 
 from agi import Brain
 from experiments.dansn_conditioned_gru_gates.four_gate import DANSNFourGateGRU
@@ -43,6 +44,7 @@ class BranchQuery:
 class ContextualBranchDataset:
     brain: Brain
     train_tokens: list[int]
+    train_query_positions: frozenset[int]
     test_supports: list[tuple[int, int, int]]
     queries: list[BranchQuery]
     context_id: int
@@ -122,6 +124,7 @@ def generate_dataset(
     )
 
     train_tokens: list[int] = []
+    train_query_positions: set[int] = set()
     for _episode in range(train_episodes):
         support_rows = [
             (cue_id, key_id, train_mapping[(key_id, cue_id)])
@@ -140,6 +143,9 @@ def generate_dataset(
             train_tokens.append(cue_id)
             train_tokens.extend(rng.choice(noise_ids) for _ in range(delay))
             train_tokens.extend((context_id, key_id, target_id))
+            # The current-token index for the key is the supervised branch
+            # selection step; its next token is the associated value.
+            train_query_positions.add(len(train_tokens) - 2)
 
         # Expose held-out key embeddings without exposing their branch relation.
         exposure_rows = list(heldout_key_ids)
@@ -191,6 +197,7 @@ def generate_dataset(
         "test_query_delay": int(test_delay),
         "test_delay_is_within_training_range": int(test_delay) <= int(train_delay),
         "train_token_count": len(train_tokens),
+        "train_query_supervision_positions": len(train_query_positions),
         "heldout_support_count": len(test_supports),
         "heldout_query_count": len(queries),
         "candidate_branches_per_key": int(cue_count),
@@ -215,6 +222,7 @@ def generate_dataset(
     return ContextualBranchDataset(
         brain=brain,
         train_tokens=train_tokens,
+        train_query_positions=frozenset(train_query_positions),
         test_supports=test_supports,
         queries=queries,
         context_id=context_id,
@@ -273,6 +281,109 @@ def _run_query(
     if logits is None or trace is None:
         raise RuntimeError("query contained no input tokens")
     return logits, history, trace
+
+
+@torch.no_grad()
+def train_contextual_stream(
+    model: DANSNFourGateGRU,
+    dataset: ContextualBranchDataset,
+    optimizer: torch.optim.Optimizer,
+    *,
+    chunk_size: int = 64,
+    grad_clip: float = 1.0,
+    pointer_loss_weight: float = 1.0,
+) -> dict:
+    """Train causally with auxiliary ranking loss on stored query candidates.
+
+    A selector loss is applied only at marked training query positions and only
+    when the correct target is already present in the persistent pointer
+    distribution. The target is scored before observe_target() reveals it.
+    """
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be >= 1")
+    if pointer_loss_weight < 0:
+        raise ValueError("pointer_loss_weight must be non-negative")
+    token_ids = dataset.train_tokens
+    if len(token_ids) < 2:
+        return {
+            "mean_loss": 0.0,
+            "mean_nll": 0.0,
+            "mean_pointer_loss": 0.0,
+            "pointer_supervision_examples": 0.0,
+            "tokens": 0.0,
+            "updates": 0.0,
+        }
+
+    model._validate_ids(token_ids)
+    state = model.initial_state()
+    history = [int(token_ids[0])]
+    chunk_losses = []
+    observed_nll = []
+    observed_pointer_losses = []
+    combined_losses = []
+    pointer_supervision_examples = 0
+    updates = 0
+    model.train()
+    optimizer.zero_grad(set_to_none=True)
+
+    for index, raw_token in enumerate(token_ids[:-1]):
+        token = int(raw_token)
+        target = int(token_ids[index + 1])
+        if history[-1] != token:
+            raise RuntimeError("stream history lost causal alignment")
+
+        logits, state, trace = model.forward_step(token, history, state)
+        target_tensor = torch.tensor(
+            [target], dtype=torch.long, device=model.device
+        )
+        nll_loss = F.cross_entropy(logits.unsqueeze(0), target_tensor)
+        selector_loss = logits.new_zeros(())
+
+        if index in dataset.train_query_positions and trace.get("pointer_available", False):
+            pointer = trace["persistent_token_distribution"]
+            target_pointer_probability = pointer[target]
+            if float(target_pointer_probability.detach().cpu()) > 0.0:
+                selector_loss = -torch.log(
+                    target_pointer_probability.clamp_min(1e-9)
+                )
+                observed_pointer_losses.append(
+                    float(selector_loss.detach().cpu())
+                )
+                pointer_supervision_examples += 1
+
+        combined_loss = nll_loss + pointer_loss_weight * selector_loss
+        chunk_losses.append(combined_loss)
+        observed_nll.append(float(nll_loss.detach().cpu()))
+        combined_losses.append(float(combined_loss.detach().cpu()))
+
+        # The prediction and optional candidate-ranking losses are both
+        # evaluated before the target is revealed to DANSN.
+        model.observe_target(history, target, state)
+        history.append(target)
+
+        if len(chunk_losses) >= chunk_size or index == len(token_ids) - 2:
+            torch.stack(chunk_losses).mean().backward()
+            if grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            state = state.detached()
+            model.detach_memory()
+            chunk_losses.clear()
+            updates += 1
+
+    return {
+        "mean_loss": sum(observed_nll) / max(len(observed_nll), 1),
+        "mean_nll": sum(observed_nll) / max(len(observed_nll), 1),
+        "mean_combined_loss": sum(combined_losses) / max(len(combined_losses), 1),
+        "mean_pointer_loss": (
+            sum(observed_pointer_losses) / len(observed_pointer_losses)
+            if observed_pointer_losses else 0.0
+        ),
+        "pointer_supervision_examples": float(pointer_supervision_examples),
+        "tokens": float(len(observed_nll)),
+        "updates": float(updates),
+    }
 
 
 @torch.no_grad()
@@ -420,6 +531,7 @@ def run_one_seed(
     train_episodes: int = 4,
     train_delay: int = 8,
     test_delay: int = 8,
+    pointer_loss_weight: float = 1.0,
 ) -> dict:
     if min(epochs, hidden_size, chunk_size) < 1:
         raise ValueError("epochs, hidden_size, and chunk_size must be positive")
@@ -459,8 +571,12 @@ def run_one_seed(
         )
         optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
         train_metrics = [
-            train_stream(
-                model, dataset.train_tokens, optimizer, chunk_size=chunk_size
+            train_contextual_stream(
+                model,
+                dataset,
+                optimizer,
+                chunk_size=chunk_size,
+                pointer_loss_weight=pointer_loss_weight,
             )
             for _ in range(epochs)
         ]
@@ -469,7 +585,9 @@ def run_one_seed(
         results[system_name] = {
             **evaluation,
             "parameter_count": _parameter_count(model),
-            "last_train_mean_loss": train_metrics[-1]["mean_loss"],
+            "last_train_mean_loss": train_metrics[-1]["mean_nll"],
+            "last_train_mean_pointer_loss": train_metrics[-1]["mean_pointer_loss"],
+            "last_train_pointer_supervision_examples": train_metrics[-1]["pointer_supervision_examples"],
         }
 
     return {
@@ -517,6 +635,8 @@ def run_benchmark(
         "mean_effective_pointer_mix",
         "mean_context_pointer_gain",
         "last_train_mean_loss",
+        "last_train_mean_pointer_loss",
+        "last_train_pointer_supervision_examples",
         "parameter_count",
     )
     summary = {}
@@ -538,10 +658,13 @@ def run_benchmark(
             **configuration,
             "seeds": seed_list,
             "candidate_branches_per_key": configuration.get("cue_count", 3),
+            "pointer_loss_weight": configuration.get("pointer_loss_weight", 1.0),
             "training": (
                 "train on multiple cue->value branches per training key; "
                 "query supervision requires using the cue to select among "
-                "already stored outgoing candidates"
+                "already stored outgoing candidates; an auxiliary pointer "
+                "negative-log-probability loss is applied only when the correct "
+                "target is already one of the direct stored candidates"
             ),
             "heldout_support": (
                 "one-shot writes for held-out keys after training; each key "
@@ -593,6 +716,7 @@ def _dataset_payload(dataset: ContextualBranchDataset) -> dict:
     return {
         "metadata": dataset.metadata,
         "train_tokens": dataset.train_tokens,
+        "train_query_positions": sorted(dataset.train_query_positions),
         "heldout_supports": [
             {"cue_id": cue, "key_id": key, "target_id": target}
             for cue, key, target in dataset.test_supports
@@ -626,6 +750,7 @@ def main() -> None:
     parser.add_argument("--train-episodes", type=int, default=4)
     parser.add_argument("--train-delay", type=int, default=8)
     parser.add_argument("--test-delay", type=int, default=8)
+    parser.add_argument("--pointer-loss-weight", type=float, default=1.0)
     parser.add_argument(
         "--output",
         type=Path,
@@ -652,6 +777,7 @@ def main() -> None:
         "train_episodes": args.train_episodes,
         "train_delay": args.train_delay,
         "test_delay": args.test_delay,
+        "pointer_loss_weight": args.pointer_loss_weight,
     }
     results = run_benchmark(seeds=seeds, **configuration)
     rendered = json.dumps(results, indent=2)
