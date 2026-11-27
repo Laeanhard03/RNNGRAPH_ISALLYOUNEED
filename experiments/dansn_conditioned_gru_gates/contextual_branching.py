@@ -334,6 +334,22 @@ def _run_query(
     return logits, (dataset.context_id, key_id), trace
 
 
+def _normalized_contextual_objective(
+    nll_losses: Sequence[torch.Tensor],
+    pointer_losses: Sequence[torch.Tensor],
+    pointer_loss_weight: float,
+) -> torch.Tensor:
+    """Average token and selector objectives over their own eligible sets."""
+    if not nll_losses:
+        raise ValueError("at least one next-token loss is required")
+    objective = torch.stack(list(nll_losses)).mean()
+    if pointer_losses:
+        objective = objective + float(pointer_loss_weight) * torch.stack(
+            list(pointer_losses)
+        ).mean()
+    return objective
+
+
 def train_contextual_stream(
     model: DANSNFourGateGRU,
     dataset: ContextualBranchDataset,
@@ -418,11 +434,11 @@ def train_contextual_stream(
             event_index += 1
 
             if len(chunk_nll_losses) >= chunk_size or event_index == total_events:
-                chunk_loss = torch.stack(chunk_nll_losses).mean()
-                if chunk_pointer_losses:
-                    chunk_loss = chunk_loss + pointer_loss_weight * torch.stack(
-                        chunk_pointer_losses
-                    ).mean()
+                chunk_loss = _normalized_contextual_objective(
+                    chunk_nll_losses,
+                    chunk_pointer_losses,
+                    pointer_loss_weight,
+                )
                 chunk_loss.backward()
                 if grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
