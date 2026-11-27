@@ -44,7 +44,7 @@ class ContextualBranchDataset:
     brain: Brain
     train_tokens: list[int]
     train_query_positions: frozenset[int]
-    train_records: list[list[tuple[int, tuple[int, ...], int, bool]]]
+    train_records: list[list[tuple[int, tuple[int, ...], int, bool, bool]]]
     test_supports: list[tuple[int, int, int]]
     queries: list[BranchQuery]
     context_id: int
@@ -125,9 +125,9 @@ def generate_dataset(
 
     train_tokens: list[int] = []
     train_query_positions: set[int] = set()
-    train_records: list[list[tuple[int, tuple[int, ...], int, bool]]] = []
+    train_records: list[list[tuple[int, tuple[int, ...], int, bool, bool]]] = []
 
-    def add_record(events: list[tuple[int, tuple[int, ...], int, bool]]) -> None:
+    def add_record(events: list[tuple[int, tuple[int, ...], int, bool, bool]]) -> None:
         """Append an independent recurrent episode and its causal token stream."""
         if not events:
             return
@@ -135,7 +135,7 @@ def generate_dataset(
         # Each event's target is exactly the next event's input. Store one
         # initial input followed by the revealed targets, without duplication.
         train_tokens.append(int(events[0][0]))
-        for event_index, (token_id, _graph_history, target_id, supervise) in enumerate(events):
+        for event_index, (token_id, _graph_history, target_id, supervise, _write) in enumerate(events):
             if int(token_id) != int(train_tokens[offset + event_index]):
                 raise RuntimeError("training record is not next-token aligned")
             if supervise:
@@ -154,9 +154,9 @@ def generate_dataset(
             # Cue enters recurrent state, but DANSN sees a separate shared
             # key path. All cue-conditioned values therefore share (context,key).
             add_record([
-                (cue_id, (cue_id,), context_id, False),
-                (context_id, (context_id,), key_id, False),
-                (key_id, (context_id, key_id), target_id, False),
+                (cue_id, (cue_id,), context_id, False, True),
+                (context_id, (context_id,), key_id, False, True),
+                (key_id, (context_id, key_id), target_id, False, True),
             ])
 
         query_rows = list(support_rows)
@@ -175,6 +175,7 @@ def generate_dataset(
                     tuple(int(x) for x in graph_history),
                     int(next_token),
                     event_index == len(query_inputs) - 1,
+                    False,
                 )
                 for event_index, (token_id, graph_history, next_token) in enumerate(
                     zip(query_inputs, graph_histories, query_targets)
@@ -187,8 +188,8 @@ def generate_dataset(
         rng.shuffle(exposure_rows)
         for key_id in exposure_rows:
             add_record([
-                (vocab["noiseleft"], (vocab["noiseleft"],), key_id, False),
-                (key_id, (key_id,), vocab["noiseright"], False),
+                (vocab["noiseleft"], (vocab["noiseleft"],), key_id, False, False),
+                (key_id, (key_id,), vocab["noiseright"], False, False),
             ])
 
     test_supports = [
@@ -283,17 +284,19 @@ def ingest_heldout_supports(
         state = model.initial_state()
         # Cue is recurrent context only. DANSN's key path is intentionally
         # identical for all cue branches: (context,key).
-        for token_id, graph_history in (
-            (cue_id, (cue_id,)),
-            (dataset.context_id, (dataset.context_id,)),
-            (key_id, (dataset.context_id, key_id)),
-        ):
+        support_events = (
+            (cue_id, (cue_id,), dataset.context_id),
+            (dataset.context_id, (dataset.context_id,), key_id),
+            (key_id, (dataset.context_id, key_id), target_id),
+        )
+        for token_id, graph_history, next_token in support_events:
             _logits, state, _trace = model.forward_step(
                 int(token_id), graph_history, state
             )
+            # Each known support continuation is observed only after its input
+            # has been scored, matching the training support-record protocol.
+            model.observe_target(graph_history, int(next_token), state)
         expected_path = (dataset.context_id, key_id, target_id)
-        # Target is revealed only after the key prediction is scored.
-        model.observe_target((dataset.context_id, key_id), target_id, state)
         written += int(expected_path in model.node_memory)
     return {
         "support_count": len(dataset.test_supports),
@@ -367,7 +370,7 @@ def train_contextual_stream(
     event_index = 0
     for record in dataset.train_records:
         state = model.initial_state()
-        for token, graph_history, target, supervise_pointer in record:
+        for token, graph_history, target, supervise_pointer, write_target in record:
             logits, state, trace = model.forward_step(
                 int(token), graph_history, state
             )
@@ -400,7 +403,8 @@ def train_contextual_stream(
 
             # Both ordinary next-token loss and candidate-ranking loss are
             # computed before the target is revealed to persistent DANSN memory.
-            model.observe_target(graph_history, int(target), state)
+            if write_target:
+                model.observe_target(graph_history, int(target), state)
             event_index += 1
 
             if len(chunk_losses) >= chunk_size or event_index == total_events:
@@ -773,6 +777,7 @@ def _dataset_payload(dataset: ContextualBranchDataset) -> dict:
                     "graph_history": list(graph_history),
                     "target_id": target,
                     "supervise_pointer": supervise,
+                    "write_target": write_target,
                 }
                 for token, graph_history, target, supervise in record
             ]
