@@ -983,6 +983,10 @@ def run_one_seed(
         "four_gate_protected_context_standard_carry": (
             "full", "protected_context_standard_carry"
         ),
+        "four_gate_protected_context_write": ("full", "protected_context_write"),
+        "four_gate_protected_context_write_standard_carry": (
+            "full", "protected_context_write_standard_carry"
+        ),
         "four_gate_no_pointer": ("no_pointer", "legacy"),
         "four_gate_no_memory_injection": ("no_memory_injection", "legacy"),
         "four_gate_no_persistent_write": ("no_persistent_write", "legacy"),
@@ -1107,6 +1111,12 @@ def run_benchmark(
                 "persistent_vector_query_coverage",
             )
         }
+        summary[system_name]["train_key_pointer_top1_accuracy"] = (
+            summary[system_name]["training_key_diagnostics"]["pointer_top1_accuracy"]
+        )
+        summary[system_name]["train_key_counterfactual_pointer_top1_accuracy"] = (
+            summary[system_name]["training_key_diagnostics"]["counterfactual_pointer_top1_accuracy"]
+        )
         stage_rows = runs[0]["results"][system_name]["cue_trajectory"]["stages"]
         summary[system_name]["stage_diagnostics"] = {}
         for stage_index, stage_row in enumerate(stage_rows):
@@ -1134,7 +1144,9 @@ def run_benchmark(
                 "legacy": "original four-gate transition with reset-filtered carry",
                 "standard_carry": "reset filters the candidate path; unfiltered previous hidden is retained in the update interpolation",
                 "protected_context": "adds an independent high-retention state to the associative selector query",
-                "protected_context_standard_carry": "combines protected context with standard GRU carry interpolation",
+                "protected_context_standard_carry": "query-only protected context plus standard GRU carry interpolation",
+                "protected_context_write": "protected context is stored in persistent candidate vectors and used in selector queries",
+                "protected_context_write_standard_carry": "context-aware candidate writes plus standard GRU carry interpolation",
             },
             "training": (
                 "train on multiple cue->value branches per training key; "

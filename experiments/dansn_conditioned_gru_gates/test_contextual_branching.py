@@ -538,3 +538,57 @@ def test_training_key_diagnostics_uses_same_three_candidate_query_protocol():
     assert 0.0 <= diagnostics["pointer_top1_accuracy"] <= 1.0
     assert 0.0 <= diagnostics["counterfactual_pointer_top1_accuracy"] <= 1.0
     assert torch.isfinite(torch.tensor(diagnostics["mean_target_score_margin"]))
+
+
+def test_context_write_variant_ingests_cue_bearing_candidate_vectors():
+    torch.manual_seed(283)
+    dataset = generate_dataset(
+        seed=283,
+        train_keys=6,
+        heldout_keys=2,
+        cue_count=3,
+        value_count=8,
+        train_episodes=1,
+        train_delay=2,
+        test_delay=3,
+    )
+    baseline = _make_model(dataset)
+    model = DANSNFourGateGRU(
+        baseline.engine,
+        baseline.embedding.num_embeddings,
+        hidden_size=baseline.hidden_size,
+        window_size=baseline.window_size,
+        graph_depth=baseline.graph_depth,
+        message_rounds=baseline.message_rounds,
+        max_active_nodes=baseline.max_active_nodes,
+        max_memory_nodes=baseline.max_memory_nodes,
+        transition_variant="protected_context_write",
+    )
+    with torch.no_grad():
+        model.four_gate_cell.controller.weight.zero_()
+        model.four_gate_cell.controller.bias.zero_()
+        model.four_gate_cell.controller.bias[
+            3 * model.hidden_size:4 * model.hidden_size
+        ].fill_(20.0)
+        model.four_gate_cell.controller.bias[
+            2 * model.hidden_size:3 * model.hidden_size
+        ].fill_(2.0)
+    ingest_heldout_supports(model, dataset)
+    query = dataset.queries[0]
+    candidates = [
+        path for path in model.node_memory
+        if len(path) == 3 and path[:2] == (dataset.context_id, query.key_id)
+    ]
+    assert len(candidates) == 3
+    vectors = [model.node_memory[path] for path in candidates]
+    assert all(torch.isfinite(vector).all() for vector in vectors)
+    assert any(
+        torch.linalg.vector_norm(vectors[i] - vectors[j]).item() > 1e-6
+        for i in range(len(vectors))
+        for j in range(i + 1, len(vectors))
+    )
+    _logits, _history, trace = _run_query(
+        model, dataset, query.cue_id, query.key_id, query.distractor_ids
+    )
+    assert trace["context_write_enabled"].item() == 1.0
+    assert torch.count_nonzero(trace["persistent_token_distribution"]).item() == 3

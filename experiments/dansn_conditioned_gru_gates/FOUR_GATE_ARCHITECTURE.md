@@ -482,3 +482,11 @@ The v6 result shows a large mismatch for protected-context variants: training po
 
 This separates two possibilities: the selector learns cue-conditioned ranking on seen keys but fails to generalize to held-out key branches, or the small training pointer loss does not represent actual train-key retrieval under the final evaluation protocol. Compare train-key and held-out metrics, candidate counts, and margins before selecting another state/query architecture.
 
+## Context-aware persistent branch writes — v7
+
+The v6 protected-context state was supplied to the associative query but was absent from the persistent candidate write. The writer still encoded only [ordinary hidden state; target embedding; graph readout]. Query-time context could be preserved without writing the corresponding cue information into the child candidate vector to which the query must attend. This is a concrete asymmetry in the v6 read/write path.
+
+Version 7 expands the persistent writer input to [ordinary hidden state; protected context; target embedding; graph readout]. The inherited 3-hidden-size writer is expanded to 4-hidden-size while copying its original hidden/target/readout weight slices into matching positions and zero-initializing the new context slice. Thus, legacy and query-only variants preserve their previous write function at initialization because their context write input is zero. Two new variants enable context-aware candidate writes: protected_context_write and protected_context_write_standard_carry. These store the support-time cue representation alongside the persistent candidate and let the learned pointer compare the query-time context with the candidate's stored context.
+
+The benchmark retains the v6 query-only protected-context variants as controls, so the effect of adding context to candidate storage can be isolated. The checkpoint marker advances to dansn_four_gate_gru_v7. The new tests verify that candidate vectors change when only the protected write context changes and that query-only mode keeps candidate writes context-blind. No selection improvement is claimed until the multi-seed artifact is inspected.
+

@@ -79,6 +79,8 @@ jobs:
               ("four_gate_standard_carry", "Four-gate standard carry"),
               ("four_gate_protected_context", "Four-gate protected context"),
               ("four_gate_protected_context_standard_carry", "Protected context + standard carry"),
+              ("four_gate_protected_context_write", "Context-aware candidate writes"),
+              ("four_gate_protected_context_write_standard_carry", "Context-aware writes + standard carry"),
               ("four_gate_no_pointer", "Four-gate, no pointer"),
               ("four_gate_no_memory_injection", "Four-gate, no memory injection"),
               ("four_gate_no_persistent_write", "Four-gate, no persistent write"),

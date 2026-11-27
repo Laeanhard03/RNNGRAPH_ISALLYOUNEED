@@ -32,7 +32,7 @@ from persistent_dansn_rnn import (
 )
 
 
-FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v6"
+FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v7"
 GRAPH_EVIDENCE_SIZE = 5
 
 
@@ -226,7 +226,8 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             raise ValueError("write_threshold must be in [0, 1)")
         allowed_transition_variants = {
             "legacy", "standard_carry", "protected_context",
-            "protected_context_standard_carry",
+            "protected_context_standard_carry", "protected_context_write",
+            "protected_context_write_standard_carry",
         }
         if transition_variant not in allowed_transition_variants:
             raise ValueError(
@@ -256,11 +257,31 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         self.write_threshold = float(write_threshold)
         self.transition_variant = transition_variant
         self.standard_gru_carry = transition_variant in {
-            "standard_carry", "protected_context_standard_carry"
+            "standard_carry", "protected_context_standard_carry",
+            "protected_context_write_standard_carry",
         }
         self.protected_context_enabled = transition_variant in {
-            "protected_context", "protected_context_standard_carry"
+            "protected_context", "protected_context_standard_carry",
+            "protected_context_write", "protected_context_write_standard_carry",
         }
+        self.context_write_enabled = transition_variant in {
+            "protected_context_write", "protected_context_write_standard_carry",
+        }
+        # Expand the inherited writer to accept a context vector while
+        # preserving the original hidden/target/readout projections.
+        old_writer = self.write_candidate
+        expanded_writer = nn.Linear(4 * hidden_size, hidden_size)
+        with torch.no_grad():
+            expanded_writer.weight.zero_()
+            expanded_writer.weight[:, :hidden_size].copy_(old_writer.weight[:, :hidden_size])
+            expanded_writer.weight[:, 2 * hidden_size:3 * hidden_size].copy_(
+                old_writer.weight[:, hidden_size:2 * hidden_size]
+            )
+            expanded_writer.weight[:, 3 * hidden_size:4 * hidden_size].copy_(
+                old_writer.weight[:, 2 * hidden_size:3 * hidden_size]
+            )
+            expanded_writer.bias.copy_(old_writer.bias)
+        self.write_candidate = expanded_writer
         # Independent slow-changing state, separate from DANSN memory fusion.
         # Instantiated in every variant to keep parameter counts identical.
         self.context_input_projection = nn.Linear(hidden_size, hidden_size)
@@ -548,6 +569,9 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             "protected_context_enabled": token_embedding.new_tensor(
                 float(self.protected_context_enabled)
             ),
+            "context_write_enabled": token_embedding.new_tensor(
+                float(self.context_write_enabled)
+            ),
             "effective_pointer_mix": pointer_mix,
             "pointer_available": pointer_available,
             "pointer_enabled": pointer_enabled,
@@ -622,7 +646,12 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         hidden = state.hidden if state.hidden is not None else zero
         readout = state.readout if state.readout is not None else zero
         target = torch.tensor(target_id, dtype=torch.long, device=self.device)
-        write_input = torch.cat((hidden, self.embedding(target), readout), dim=-1)
+        context_hidden = getattr(state, "context_hidden", None)
+        if context_hidden is None or not self.context_write_enabled:
+            context_hidden = zero
+        write_input = torch.cat(
+            (hidden, context_hidden, self.embedding(target), readout), dim=-1
+        )
         candidate = self.memory_norm(torch.tanh(self.write_candidate(write_input)))
 
         previous = self.node_memory.get(post_context, zero).to(

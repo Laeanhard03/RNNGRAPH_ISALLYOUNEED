@@ -222,7 +222,7 @@ def test_checkpoint_round_trip_preserves_four_gate_weights_and_memory():
         checkpoint = Path(tmp) / "four_gate.pt"
         model.save_checkpoint(checkpoint)
         saved = torch.load(checkpoint, map_location="cpu", weights_only=True)
-        assert saved["architecture"] == "dansn_four_gate_gru_v6"
+        assert saved["architecture"] == "dansn_four_gate_gru_v7"
         restored = make_model(brain)
         restored.load_checkpoint(checkpoint)
 
@@ -777,3 +777,58 @@ def test_protected_context_checkpoint_round_trip_preserves_variant():
     for key, value in model.state_dict().items():
         assert torch.equal(restored.state_dict()[key], value)
     assert restored.transition_variant == "protected_context_standard_carry"
+
+
+def test_context_aware_candidate_write_stores_protected_context():
+    torch.manual_seed(67)
+    brain, ids = make_brain_and_stream()
+    model = make_model(brain, transition_variant="protected_context_write")
+    hidden = torch.zeros(model.hidden_size)
+    readout = torch.zeros(model.hidden_size)
+    write_gate = torch.ones(model.hidden_size)
+    cue_context = torch.linspace(-1.0, 1.0, model.hidden_size)
+
+    # Make only the context slice influence the candidate.
+    with torch.no_grad():
+        model.write_candidate.weight.zero_()
+        model.write_candidate.bias.zero_()
+        model.write_candidate.weight[:, model.hidden_size:2 * model.hidden_size].copy_(
+            torch.eye(model.hidden_size)
+        )
+
+    state_without_context = FourGateState(
+        hidden=hidden, readout=readout, write_gate=write_gate,
+        context_hidden=torch.zeros_like(cue_context),
+    )
+    state_with_context = FourGateState(
+        hidden=hidden, readout=readout, write_gate=write_gate,
+        context_hidden=cue_context,
+    )
+    path_a = model.observe_target([ids[0]], ids[1], state_without_context)
+    path_b = model.observe_target([ids[2]], ids[1], state_with_context)
+    assert path_a in model.node_memory and path_b in model.node_memory
+    assert not torch.allclose(model.node_memory[path_a], model.node_memory[path_b])
+    assert torch.linalg.vector_norm(model.node_memory[path_b]).item() > 0.0
+
+
+def test_query_only_protected_context_does_not_change_candidate_write():
+    torch.manual_seed(71)
+    brain, ids = make_brain_and_stream()
+    model = make_model(brain, transition_variant="protected_context")
+    hidden = torch.zeros(model.hidden_size)
+    readout = torch.zeros(model.hidden_size)
+    write_gate = torch.ones(model.hidden_size)
+    with torch.no_grad():
+        model.write_candidate.weight.zero_()
+        model.write_candidate.bias.zero_()
+        model.write_candidate.weight[:, model.hidden_size:2 * model.hidden_size].copy_(
+            torch.eye(model.hidden_size)
+        )
+    state = FourGateState(
+        hidden=hidden, readout=readout, write_gate=write_gate,
+        context_hidden=torch.linspace(-1.0, 1.0, model.hidden_size),
+    )
+    path = model.observe_target([ids[0]], ids[1], state)
+    assert torch.allclose(
+        model.node_memory[path], torch.zeros_like(model.node_memory[path])
+    )
