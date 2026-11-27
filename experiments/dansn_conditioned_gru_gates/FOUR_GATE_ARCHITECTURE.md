@@ -376,3 +376,35 @@ The chunk objective is `mean(NLL) + pointer_loss_weight × mean(selector_loss ov
 Added a mathematical gradient test with 64 token losses and 5 selector losses. It verifies the selector gradients are averaged over 5 eligible examples (1/5 each), rather than diluted over all 64 events. The corrected benchmark is now running in [Actions run 45981519637](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45981519637); its performance result remains pending until the artifact is inspected.
 
 This correction tests the optimizer objective scaling before changing the candidate-scoring architecture. If ranking remains near `ln(3)` after this normalization, next isolate the recurrent cue representation and introduce an explicit additive candidate scorer with separate query, stored-candidate, and interaction terms. Do not claim contextual recall until counterfactual cue selection exceeds 33.33% and reset-state performance declines.
+
+
+## Nonlinear context-conditioned candidate scorer — implemented, benchmark pending — 2026-11-27
+
+The previous selector's query/key dot product remained at the uniform three-branch baseline even after (a) separating recurrent cue input from shared DANSN graph history, (b) correcting read-only query/write parity, (c) activating selector supervision, (d) separately normalizing selector loss, and (e) retaining a recurrent residual during memory injection.
+
+The selector now uses an explicit nonlinear pairwise scorer:
+`score(q,k) = MLP([q; k; q ⊙ k]) + structural_prior`
+
+- (q) is projected from the current token embedding and previous recurrent hidden state.
+- (k) is projected from the candidate child embedding plus its persisted DANSN path state.
+- The elementwise interaction (q ⊙ k) gives the MLP an explicit cue/candidate compatibility channel.
+- The resulting scores still softmax over the direct outgoing DANSN candidates, then feed the pointer distribution. Candidate discovery, persistent writes, and causal score-before-write order are unchanged.
+
+### Diagnostics added
+
+The model trace now exposes pointer candidate IDs/scores, projected query, and previous recurrent hidden state. Held-out evaluation records:
+- mean target candidate score margin against the strongest alternative;
+- pairwise cosine similarity and L2 distance between recurrent hidden states for distinct cues on the same key, with the distractor sequence held identical.
+
+The matched-distractor diagnostic is important: comparing cue-conditioned hidden states under different noise sequences would confound the cue with distractor variation. The final diagnostic replays each cue for each held-out key using the same distractor tokens.
+
+Regression tests verify candidate score/ID alignment, nonzero finite gradients into the nonlinear scorer from ranking loss, and cue sensitivity of the recurrent query state under matched distractors. Checkpoint architecture marker advanced to `dansn_four_gate_gru_v5`, with a round-trip test checking the marker, so older v4 checkpoints are not mistaken for the nonlinear-selector model.
+
+Commits:
+- scorer: `e8e3583cc068975503ef5aa39c75fdc87c638ccf`
+- cue-state and score-margin diagnostics: `107eb7800541381f2603e2ddffad28847f246623`
+- matched-distractor diagnostic: `beee6eea514dcd62abf0100f5a13298962ea9796`
+- checkpoint marker v5: `50abf452d033b2ab82156aa99de2378cc1bd86c9`
+- checkpoint regression test: `d860b6d99077e6c79ebc7921126f13d4c3a2bcfd`
+
+The latest complete code/test revision is being validated by [GitHub Actions run 45987516539](https://github.com/Laeanhard03/RNNGRAPH_ISALLYOUNEED/actions/runs/45987516539). Earlier runs on the scorer implementation passed the nonlinear scorer's gradient and cue-sensitivity tests; the benchmark stage is still running. Do not claim a recall improvement until the artifact shows above-chance pointer/counterfactual selection and a positive target-score margin.
