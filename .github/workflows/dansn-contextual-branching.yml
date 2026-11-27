@@ -1,0 +1,123 @@
+name: DANSN contextual branch selection
+
+on:
+  push:
+    branches:
+      - feature/dg-gru-four-gate-control
+    paths:
+      - "experiments/dansn_conditioned_gru_gates/contextual_branching.py"
+      - "experiments/dansn_conditioned_gru_gates/test_contextual_branching.py"
+      - "experiments/dansn_conditioned_gru_gates/four_gate.py"
+      - "experiments/dansn_conditioned_gru_gates/test_four_gate.py"
+      - "persistent_dansn_rnn.py"
+      - ".github/workflows/dansn-contextual-branching.yml"
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: Comma-separated random seeds
+        required: true
+        default: "7,13,21"
+        type: string
+      epochs:
+        description: Training epochs
+        required: true
+        default: "4"
+        type: string
+      test_delay:
+        description: Distractor tokens between cue and query context
+        required: true
+        default: "8"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  contextual-branch-selection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out experimental branch
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-recurrent.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-recurrent.txt pytest
+      - name: Run four-gate and contextual-branch tests
+        run: python -m pytest -q experiments/dansn_conditioned_gru_gates/
+      - name: Train and evaluate multi-branch recall
+        env:
+          SEEDS: ${{ inputs.seeds || '7,13,21' }}
+          EPOCHS: ${{ inputs.epochs || '4' }}
+          TEST_DELAY: ${{ inputs.test_delay || '8' }}
+        run: |
+          python -m experiments.dansn_conditioned_gru_gates.contextual_branching \
+            --seeds "$SEEDS" \
+            --epochs "$EPOCHS" \
+            --test-delay "$TEST_DELAY" \
+            --output benchmark-results/contextual_branching_results.json \
+            --data-output benchmark-results/contextual_branching_dataset.json
+      - name: Write benchmark summary
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          data = json.loads(
+              Path("benchmark-results/contextual_branching_results.json").read_text()
+          )
+          systems = [
+              ("four_gate_full", "Four-gate full"),
+              ("four_gate_no_pointer", "Four-gate, no pointer"),
+              ("four_gate_no_memory_injection", "Four-gate, no memory injection"),
+              ("four_gate_no_persistent_write", "Four-gate, no persistent write"),
+              ("four_gate_no_graph_evidence", "Four-gate, no graph evidence"),
+          ]
+          metrics = [
+              ("query_top1_accuracy", "Output top-1"),
+              ("pointer_top1_accuracy", "Pointer top-1"),
+              ("counterfactual_pointer_top1_accuracy", "Counterfactual cue"),
+              ("reset_state_pointer_top1_accuracy", "Pointer with state reset"),
+              ("mean_pointer_candidate_count", "Candidates/query"),
+              ("mean_effective_memory_mix", "Memory mix"),
+              ("mean_effective_pointer_mix", "Pointer mix"),
+              ("persistent_vector_write_coverage", "Support write coverage"),
+          ]
+          lines = [
+              "## Context-dependent multi-branch recall",
+              "",
+              "Same held-out key has three stored outgoing values. The cue is processed into recurrent state before the key is queried.",
+              "",
+              "| System | " + " | ".join(label for _, label in metrics) + " |",
+              "|---|" + "|".join("---:" for _ in metrics) + "|",
+          ]
+          for key, label in systems:
+              row = [label]
+              for metric, _ in metrics:
+                  item = data["summary"][key][metric]["mean"]
+                  row.append(f"{item:.3f}")
+              lines.append("| " + " | ".join(row) + " |")
+          lines += [
+              "",
+              "The no-pointer control keeps memory-to-hidden and decoder-vector fusion active; it disables only the pointer probability mixture.",
+              "",
+              "This is a synthetic mechanism test. Candidate count, pointer accuracy, cue counterfactuals, and reset-state diagnostics should be interpreted together.",
+          ]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
+              handle.write("\n".join(lines) + "\n")
+          PY
+      - name: Upload data and benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: dansn-contextual-branch-results
+          path: |
+            benchmark-results/contextual_branching_results.json
+            benchmark-results/contextual_branching_dataset.json
+          if-no-files-found: error
