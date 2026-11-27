@@ -109,3 +109,17 @@ def test_same_key_exposes_multiple_persistent_pointer_candidates():
             assert (dataset.context_id, key_id, value_id) in trace[
                 "persistent_memory_paths"
             ]
+
+
+def test_default_training_delay_covers_default_evaluation_delay():
+    dataset = generate_dataset(
+        seed=229,
+        train_keys=6,
+        heldout_keys=3,
+        cue_count=3,
+        value_count=8,
+        train_episodes=1,
+    )
+    assert dataset.metadata["train_query_delay_max"] == 8
+    assert dataset.metadata["test_query_delay"] == 8
+    assert dataset.metadata["test_delay_is_within_training_range"] is True
