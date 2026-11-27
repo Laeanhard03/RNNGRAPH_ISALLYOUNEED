@@ -123,3 +123,62 @@ def test_default_training_delay_covers_default_evaluation_delay():
     assert dataset.metadata["train_query_delay_max"] == 8
     assert dataset.metadata["test_query_delay"] == 8
     assert dataset.metadata["test_delay_is_within_training_range"] is True
+
+
+def test_training_query_positions_point_to_key_and_revealed_value():
+    dataset = generate_dataset(
+        seed=233,
+        train_keys=6,
+        heldout_keys=3,
+        cue_count=3,
+        value_count=8,
+        train_episodes=2,
+        train_delay=2,
+        test_delay=3,
+    )
+    expected_count = 2 * 6 * 3
+    assert len(dataset.train_query_positions) == expected_count
+    for position in dataset.train_query_positions:
+        key_id = dataset.train_tokens[position]
+        target_id = dataset.train_tokens[position + 1]
+        assert dataset.train_tokens[position - 1] == dataset.context_id
+        assert any(
+            train_key == key_id and target_id == value_id
+            for (train_key, _cue), value_id in dataset.metadata[
+                "train_mapping"
+            ].items()
+        )
+
+
+def test_auxiliary_pointer_loss_trains_only_stored_query_candidates():
+    from experiments.dansn_conditioned_gru_gates.contextual_branching import (
+        train_contextual_stream,
+    )
+
+    torch.manual_seed(239)
+    dataset = generate_dataset(
+        seed=239,
+        train_keys=6,
+        heldout_keys=2,
+        cue_count=3,
+        value_count=8,
+        train_episodes=2,
+        train_delay=2,
+        test_delay=3,
+    )
+    model = _make_model(dataset)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-3)
+    before = model.query_projection.weight.detach().clone()
+
+    metrics = train_contextual_stream(
+        model,
+        dataset,
+        optimizer,
+        chunk_size=32,
+        pointer_loss_weight=1.0,
+    )
+
+    assert metrics["pointer_supervision_examples"] > 0
+    assert metrics["mean_pointer_loss"] > 0.0
+    assert torch.isfinite(torch.tensor(metrics["mean_pointer_loss"]))
+    assert not torch.allclose(before, model.query_projection.weight.detach())
