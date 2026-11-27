@@ -779,7 +779,7 @@ def _dataset_payload(dataset: ContextualBranchDataset) -> dict:
                     "supervise_pointer": supervise,
                     "write_target": write_target,
                 }
-                for token, graph_history, target, supervise in record
+                for token, graph_history, target, supervise, write_target in record
             ]
             for record in dataset.train_records
         ],
