@@ -693,9 +693,9 @@ def test_pointer_query_key_embedding_ablation_keeps_recurrent_key_input():
     h = model.hidden_size
     with torch.no_grad():
         model.query_projection.weight.zero_()
-        model.query_projection.weight[:, :h].copy_(torch.eye(h))
-        model.query_projection.weight[:, h:].zero_()
-        model.query_projection.bias.zero_()
+        model.query_projection.weight[:, :h].zero_()
+        model.query_projection.weight[:, h:].copy_(torch.eye(h))
+        # The inherited query projection is bias-free.
     key_a = torch.linspace(-0.9, 0.9, h)
     key_b = torch.linspace(0.8, -0.8, h)
     selection = torch.linspace(-0.4, 0.6, h)
@@ -738,7 +738,6 @@ def test_key_embedding_enabled_pointer_query_remains_key_sensitive():
         model.query_projection.weight.zero_()
         model.query_projection.weight[:, :h].copy_(torch.eye(h))
         model.query_projection.weight[:, h:].zero_()
-        model.query_projection.bias.zero_()
     key_a = torch.linspace(-0.9, 0.9, h)
     key_b = torch.linspace(0.8, -0.8, h)
     selection = torch.zeros(h)
