@@ -665,3 +665,86 @@ def test_query_aligned_candidate_write_stores_the_pre_key_query_state():
     ]
     assert torch.allclose(stored, expected_candidate, atol=1e-6, rtol=1e-6)
 
+def test_pointer_query_key_embedding_ablation_keeps_recurrent_key_input():
+    """Removing key identity from ranking must not remove the key from recurrence."""
+    torch.manual_seed(307)
+    dataset = generate_dataset(
+        seed=307,
+        train_keys=6,
+        heldout_keys=2,
+        cue_count=3,
+        value_count=8,
+        train_episodes=1,
+        train_delay=2,
+        test_delay=3,
+    )
+    baseline = _make_model(dataset)
+    model = DANSNFourGateGRU(
+        baseline.engine,
+        baseline.embedding.num_embeddings,
+        hidden_size=baseline.hidden_size,
+        window_size=baseline.window_size,
+        graph_depth=baseline.graph_depth,
+        message_rounds=baseline.message_rounds,
+        max_active_nodes=baseline.max_active_nodes,
+        max_memory_nodes=baseline.max_memory_nodes,
+        transition_variant="protected_context_no_key_embedding",
+    )
+    h = model.hidden_size
+    with torch.no_grad():
+        model.query_projection.weight.zero_()
+        model.query_projection.weight[:, :h].copy_(torch.eye(h))
+        model.query_projection.weight[:, h:].zero_()
+        model.query_projection.bias.zero_()
+    key_a = torch.linspace(-0.9, 0.9, h)
+    key_b = torch.linspace(0.8, -0.8, h)
+    selection = torch.linspace(-0.4, 0.6, h)
+    query_a, query_token_a = model._pointer_query(key_a, selection)
+    query_b, query_token_b = model._pointer_query(key_b, selection)
+    assert torch.count_nonzero(query_token_a).item() == 0
+    assert torch.count_nonzero(query_token_b).item() == 0
+    assert torch.allclose(query_a, selection)
+    assert torch.allclose(query_b, selection)
+
+    query = dataset.queries[0]
+    _logits, _state, trace = model.forward_step(
+        int(query.key_id),
+        (dataset.context_id, query.key_id),
+        model.initial_state(),
+    )
+    actual_key_embedding = model.embedding(
+        torch.tensor(query.key_id, dtype=torch.long)
+    )
+    assert torch.allclose(trace["recurrent_input_embedding"], actual_key_embedding)
+    assert torch.count_nonzero(trace["pointer_query_token_embedding"]).item() == 0
+    assert trace["pointer_key_embedding_enabled"].item() == 0.0
+
+
+def test_key_embedding_enabled_pointer_query_remains_key_sensitive():
+    torch.manual_seed(311)
+    dataset = generate_dataset(
+        seed=311,
+        train_keys=6,
+        heldout_keys=2,
+        cue_count=3,
+        value_count=8,
+        train_episodes=1,
+        train_delay=2,
+        test_delay=3,
+    )
+    model = _make_model(dataset)
+    h = model.hidden_size
+    with torch.no_grad():
+        model.query_projection.weight.zero_()
+        model.query_projection.weight[:, :h].copy_(torch.eye(h))
+        model.query_projection.weight[:, h:].zero_()
+        model.query_projection.bias.zero_()
+    key_a = torch.linspace(-0.9, 0.9, h)
+    key_b = torch.linspace(0.8, -0.8, h)
+    selection = torch.zeros(h)
+    query_a, key_input_a = model._pointer_query(key_a, selection)
+    query_b, key_input_b = model._pointer_query(key_b, selection)
+    assert torch.allclose(key_input_a, key_a)
+    assert torch.allclose(key_input_b, key_b)
+    assert not torch.allclose(query_a, query_b)
+

@@ -505,3 +505,20 @@ A focused regression test checks that the write snapshot equals the query's pre-
 
 The v7 three-seed result showed 100% seen-key selector accuracy but only 22.22% held-out pointer/counterfactual accuracy for context-aware writes; target score margin was -3.72. The query-only protected-context control was 27.78% held-out and 100% seen-key, while the original model remained at chance. These results indicate a severe seen/held-out gap, not a solved branch-selection task. V8 tests whether matching the stored candidate representation to the actual query time point reduces that mismatch. It remains a hypothesis until the next three-seed benchmark is inspected.
 
+## Pointer-query key-identity ablation — v9
+
+The v8 results show that query-aligned candidate writes do not close the seen-key / held-out-key gap. In the protected-context family, the pointer is perfectly accurate on seen training keys but held-out top-1 remains around 22–28% on average; query alignment raises this only to 23.61%. Each query has three candidates and complete persistent-vector coverage, and the protected context remains cue-separated at the key (selection cross-cue L2 around 7.8). Thus, key representation leakage or an identity shortcut inside the pointer query is a plausible next cause.
+
+The pointer query currently uses `query_projection([embedding(current_key); selection_hidden])`. The graph has already matched the current key to a shared parent and enumerated that parent's outgoing candidate branches. A branch selector should therefore be able to choose among those candidates from the recurrent cue context without relying on the key token's learned identity embedding.
+
+Version 9 adds two controlled variants:
+
+- `protected_context_no_key_embedding`: retains protected cue context and v7's original writer, but replaces only the key-token half of the pointer-query input with zeros.
+- `protected_context_query_aligned_write_no_key_embedding`: combines that query ablation with v8's pre-key, query-aligned persistent candidate write.
+
+The actual key token remains available to the recurrent cell, protected-context updater, graph-history matcher, and graph readout. Only the direct candidate-ranking query loses its key embedding. The query projection retains its full parameter shape; the disabled input slice receives no gradient. Existing key-aware v7/v8 variants remain as controls.
+
+A regression test sets the query projection to isolate its key-input slice and proves that changing the key embedding cannot change the ablated pointer query, while the key remains present in the recurrent input. A companion test proves the default/key-aware query remains key-sensitive. The checkpoint marker advances to `dansn_four_gate_gru_v9`.
+
+The three-seed benchmark compares the key-aware and keyless query variants with the same data, shared candidate parents, three candidates, delays, support writes, training schedule, counterfactuals, and seen-key diagnostics. This is a controlled hypothesis, not a result; acceptance still requires above-chance held-out pointer and counterfactual accuracy, positive target-score margin, and consistent gains across seeds.
+

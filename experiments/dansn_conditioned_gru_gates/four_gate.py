@@ -32,7 +32,7 @@ from persistent_dansn_rnn import (
 )
 
 
-FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v8"
+FOUR_GATE_CHECKPOINT_ARCHITECTURE = "dansn_four_gate_gru_v9"
 GRAPH_EVIDENCE_SIZE = 5
 
 
@@ -235,6 +235,8 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             "protected_context_write_standard_carry",
             "protected_context_query_aligned_write",
             "protected_context_query_aligned_write_standard_carry",
+            "protected_context_no_key_embedding",
+            "protected_context_query_aligned_write_no_key_embedding",
         }
         if transition_variant not in allowed_transition_variants:
             raise ValueError(
@@ -273,15 +275,25 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             "protected_context_write", "protected_context_write_standard_carry",
             "protected_context_query_aligned_write",
             "protected_context_query_aligned_write_standard_carry",
+            "protected_context_no_key_embedding",
+            "protected_context_query_aligned_write_no_key_embedding",
         }
         self.context_write_enabled = transition_variant in {
             "protected_context_write", "protected_context_write_standard_carry",
             "protected_context_query_aligned_write",
             "protected_context_query_aligned_write_standard_carry",
+            "protected_context_query_aligned_write_no_key_embedding",
         }
         self.query_aligned_write_enabled = transition_variant in {
             "protected_context_query_aligned_write",
             "protected_context_query_aligned_write_standard_carry",
+            "protected_context_query_aligned_write_no_key_embedding",
+        }
+        # Only the direct ranking query loses key identity in these controls.
+        # The actual key still enters recurrence, graph matching, and readout.
+        self.pointer_key_embedding_enabled = transition_variant not in {
+            "protected_context_no_key_embedding",
+            "protected_context_query_aligned_write_no_key_embedding",
         }
         # Expand the inherited writer to accept a context vector while
         # preserving the original hidden/target/readout projections.
@@ -375,12 +387,27 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             updated = retention * previous + (1.0 - retention) * proposal
         return updated, retention
 
+    def _pointer_query(
+        self, token_embedding: Tensor, selection_hidden: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        """Build the branch-ranking query, optionally excluding key identity."""
+        query_token_embedding = (
+            token_embedding
+            if self.pointer_key_embedding_enabled
+            else torch.zeros_like(token_embedding)
+        )
+        query = self.query_projection(torch.cat(
+            (query_token_embedding, selection_hidden), dim=-1
+        ))
+        return query, query_token_embedding
+
     def _read_persistent_memory(
         self,
         token_embedding: Tensor,
         previous_hidden: Tensor,
         matched_path,
         active_paths: Sequence[tuple[int, ...]],
+        pointer_query: Tensor,
     ) -> tuple[Tensor, list[tuple[int, ...]], Tensor, bool, Tensor, Tensor]:
         """Read persistent vectors and build a direct next-token pointer.
 
@@ -415,9 +442,7 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             empty_ids = torch.empty(0, dtype=torch.long, device=self.device)
             return zero, [], pointer, False, empty, empty_ids
 
-        query = self.query_projection(
-            torch.cat((token_embedding, previous_hidden), dim=-1)
-        )
+        query = pointer_query
         keys: list[Tensor] = []
         values: list[Tensor] = []
         scores: list[Tensor] = []
@@ -499,6 +524,9 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
         graph_readout, matched_path, active_paths = self._read_graph(
             token_embedding, previous_hidden, history
         )
+        pointer_query, pointer_query_token_embedding = self._pointer_query(
+            token_embedding, selection_hidden
+        )
         (
             persistent_readout,
             persistent_paths,
@@ -507,7 +535,8 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             pointer_scores,
             pointer_candidate_ids,
         ) = self._read_persistent_memory(
-            token_embedding, selection_hidden, matched_path, active_paths
+            token_embedding, selection_hidden, matched_path, active_paths,
+            pointer_query,
         )
         evidence = self._graph_evidence(matched_path, active_paths, token_embedding)
         if self.gate_ablation == "no_graph_evidence":
@@ -574,9 +603,12 @@ class DANSNFourGateGRU(DANSNConditionedGRU):
             "persistent_token_distribution": persistent_token_distribution,
             "pointer_scores": pointer_scores,
             "pointer_candidate_ids": pointer_candidate_ids,
-            "pointer_query": self.query_projection(
-                torch.cat((token_embedding, selection_hidden), dim=-1)
+            "pointer_query": pointer_query,
+            "pointer_query_token_embedding": pointer_query_token_embedding,
+            "pointer_key_embedding_enabled": token_embedding.new_tensor(
+                float(self.pointer_key_embedding_enabled)
             ),
+            "recurrent_input_embedding": token_embedding,
             "previous_hidden": previous_hidden,
             "selection_hidden": selection_hidden,
             "previous_context_hidden": (

@@ -993,6 +993,12 @@ def run_one_seed(
         "four_gate_protected_context_query_aligned_write_standard_carry": (
             "full", "protected_context_query_aligned_write_standard_carry"
         ),
+        "four_gate_protected_context_no_key_embedding": (
+            "full", "protected_context_no_key_embedding"
+        ),
+        "four_gate_protected_context_query_aligned_write_no_key_embedding": (
+            "full", "protected_context_query_aligned_write_no_key_embedding"
+        ),
         "four_gate_no_pointer": ("no_pointer", "legacy"),
         "four_gate_no_memory_injection": ("no_memory_injection", "legacy"),
         "four_gate_no_persistent_write": ("no_persistent_write", "legacy"),
@@ -1032,6 +1038,7 @@ def run_one_seed(
             **evaluation,
             "parameter_count": _parameter_count(model),
             "transition_variant": transition_variant,
+            "pointer_key_embedding_enabled": float(model.pointer_key_embedding_enabled),
             "last_train_mean_loss": train_metrics[-1]["mean_nll"],
             "last_train_mean_pointer_loss": train_metrics[-1]["mean_pointer_loss"],
             "last_train_pointer_supervision_examples": train_metrics[-1]["pointer_supervision_examples"],
@@ -1092,6 +1099,7 @@ def run_benchmark(
         "last_train_pointer_supervision_examples",
         "last_train_mean_pointer_candidates",
         "parameter_count",
+        "pointer_key_embedding_enabled",
     )
     summary = {}
     for system_name in runs[0]["results"]:
@@ -1155,6 +1163,8 @@ def run_benchmark(
                 "protected_context_write_standard_carry": "context-aware candidate writes plus standard GRU carry interpolation",
                 "protected_context_query_aligned_write": "stores the pre-key hidden/context state used by the pointer query",
                 "protected_context_query_aligned_write_standard_carry": "query-aligned candidate writes plus standard GRU carry interpolation",
+                "protected_context_no_key_embedding": "protected-context selector query excludes the current key token embedding",
+                "protected_context_query_aligned_write_no_key_embedding": "query-aligned candidate writes with key identity excluded from pointer queries",
             },
             "training": (
                 "train on multiple cue->value branches per training key; "

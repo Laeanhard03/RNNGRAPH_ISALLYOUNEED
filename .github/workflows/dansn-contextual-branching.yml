@@ -83,6 +83,8 @@ jobs:
               ("four_gate_protected_context_write_standard_carry", "Context-aware writes + standard carry"),
               ("four_gate_protected_context_query_aligned_write", "Query-aligned context writes"),
               ("four_gate_protected_context_query_aligned_write_standard_carry", "Query-aligned writes + standard carry"),
+              ("four_gate_protected_context_no_key_embedding", "Protected context, no key embedding"),
+              ("four_gate_protected_context_query_aligned_write_no_key_embedding", "Query-aligned writes, no key embedding"),
               ("four_gate_no_pointer", "Four-gate, no pointer"),
               ("four_gate_no_memory_injection", "Four-gate, no memory injection"),
               ("four_gate_no_persistent_write", "Four-gate, no persistent write"),
@@ -101,6 +103,7 @@ jobs:
               ("mean_pointer_target_score_margin", "Target score margin"),
               ("persistent_vector_write_coverage", "Support write coverage"),
               ("persistent_vector_query_coverage", "Query coverage"),
+              ("pointer_key_embedding_enabled", "Key embedding in pointer"),
           ]
           lines = [
               "## Context-dependent multi-branch recall",
